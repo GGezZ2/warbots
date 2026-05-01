@@ -1,0 +1,15 @@
+# Node.js
+node_modules/
+dist/
+.env
+
+# Config file con token
+config.json
+node_modules/
+
+# Log
+*.log
+
+# Sistema operativo
+.DS_Store
+Thumbs.db

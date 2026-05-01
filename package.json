@@ -1,0 +1,9 @@
+{
+  "name": "westmarch-discord-bots",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "npm install --prefix westmarch-bot && npm install --prefix bot-miniere",
+    "start": "node westmarch-bot/index.js & node bot-miniere/index.js & wait"
+  }
+}
