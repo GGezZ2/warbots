@@ -27,6 +27,7 @@ const GUILD_ID = process.env.GUILD_ID?.trim();
 const DB_PATH = process.env.WESTMARCH_DB_PATH || process.env.DB_PATH || "/data/westmarch.db";
 const NOME_BOT = "Grumni Picconaccia";
 const BETA_ROLE_NAME = "Beta";
+const GM_ROLE_NAME = "gm-bot";
 
 if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
   console.error("Mancano variabili Railway. Servono MINIERE_TOKEN, MINIERE_CLIENT_ID e GUILD_ID.");
@@ -175,7 +176,7 @@ const FRASI_NON_COMUNE_ZERO = [
   "😬 **{pg}** ha cercato **{mat}** nella **{miniera}**... materiale NON COMUNE, genio. Serviva almeno 9 e tu hai tirato come mia zia cieca al bingo. Patetico.",
   "🫥 **{mat}**? Nella **{miniera}**? **{pg}**, per i non comuni devi tirare ALTO. Non con queste manine da impiegato delle poste in pausa caffè.",
   "🪨 **{pg}** cerca **{mat}** nella **{miniera}** e fallisce. Come al solito. Per i non comuni serve fortuna, e tu sei nato sotto una stella morta.",
-  "💤 La **{miniera}** tiene stretti i suoi **{mat}**. Non li dà ai dilettanti come **{pg}**. Torna con una fortezza vera.",
+  "💤 La **{miniera}** tiene stretti i suoi **{mat}**. Non li dà ai dilettanti come **{pg}**. Torna quando il dado smette di odiarti.",
   "🚫 **{pg}** voleva **{mat}** dalla **{miniera}**. La **{miniera}** voleva che **{pg}** andasse a fare in culo. Indovina chi ha vinto?",
   "🤏 Soooo vicino a trovare **{mat}**... AHAHAHAHA no sto scherzando. **{pg}** non era neanche nella stessa galassia.",
   "🐀 **{pg}**, cercare **{mat}** col tuo tiro è come cercare di leccarti il gomito. Puoi provarci, ma fai solo ridere gli altri.",
@@ -188,12 +189,6 @@ const FRASI_NO_PG = [
   "😤 {name}, vuoi farmare senza neanche un personaggio?! È come presentarti a una guerra senza armi e senza vestiti.",
   "🪦 {name}, non esisti nel mio registro. Per me sei aria. Crea un PG col bot principale e poi ne riparliamo.",
   "🤡 {name} prova a farmare senza personaggio. SENZA PERSONAGGIO. Fatti una vita prima, poi una scheda."
-];
-
-const FRASI_NO_FORTEZZA = [
-  "🏚️ {name}, il tuo **{pg}** non ha ancora una fortezza registrata! Usa `/imposta_fortezza` oppure fatti aiutare da qualcuno con due neuroni e il ruolo Beta.",
-  "🧱 Ehi {name}, **{pg}** non ha la fortezza. Senza fortezza non si farma. Non sono una ONLUS del piccone.",
-  "🏗️ {name}, **{pg}** è senza fortezza. Come un cavaliere senza cavallo. Patetico. Prima la fortezza, poi il sudore."
 ];
 
 // === UTILS ===
@@ -223,9 +218,9 @@ function nowRome() {
   }).format(new Date());
 }
 
-function hasBetaRole(member) {
+function hasRole(member, roleName) {
   try {
-    return member?.roles?.cache?.some(r => r.name === BETA_ROLE_NAME);
+    return member?.roles?.cache?.some(r => r.name === roleName);
   } catch {
     return false;
   }
@@ -520,17 +515,16 @@ function calcolaRisultato(dado, fortezza, rarita) {
   return 2;
 }
 
-// === DB HELPERS ===
+function getEffectiveFortress(fortress) {
+  if (fortress) return fortress;
 
-async function ensurePlayer(user) {
-  const existing = await db.get("SELECT id FROM players WHERE id = ?", user.id);
-
-  if (!existing) {
-    await db.run("INSERT INTO players (id, name) VALUES (?, ?)", user.id, user.username);
-  } else {
-    await db.run("UPDATE players SET name = ? WHERE id = ?", user.username, user.id);
-  }
+  return {
+    name: "Nessuna fortezza",
+    level: 0
+  };
 }
+
+// === DB HELPERS ===
 
 async function getPersonaggiUtente(userId) {
   return db.all(
@@ -545,49 +539,6 @@ async function getPersonaggioByName(userId, nomePg) {
     String(userId),
     nomePg
   );
-}
-
-async function getPersonaggioById(characterId) {
-  return db.get(
-    "SELECT id, playerId, name, xp, gold, bank, level FROM characters WHERE id = ?",
-    characterId
-  );
-}
-
-async function aggiungiPgDB(user, nome) {
-  await ensurePlayer(user);
-
-  const info = await db.run(
-    "INSERT INTO characters (playerId, name, xp, gold, bank, level) VALUES (?, ?, 0, 0, 0, 1)",
-    user.id,
-    nome
-  );
-
-  return getPersonaggioById(info.lastID);
-}
-
-async function rimuoviPgDB(userId, nome) {
-  const pg = await getPersonaggioByName(userId, nome);
-  if (!pg) return false;
-
-  await db.run("DELETE FROM inventory WHERE characterId = ?", pg.id);
-  await db.run("DELETE FROM attunements WHERE characterId = ?", pg.id);
-  await db.run("DELETE FROM daily_farms WHERE characterId = ?", pg.id);
-  await db.run("DELETE FROM weekly_farms WHERE characterId = ?", pg.id);
-  await db.run("DELETE FROM materials_inventory WHERE characterId = ?", pg.id);
-  await db.run("DELETE FROM fortresses WHERE characterId = ?", pg.id);
-  await db.run("DELETE FROM characters WHERE id = ?", pg.id);
-
-  const remaining = await getPersonaggiUtente(userId);
-  if (remaining.length === 0) {
-    await db.run("DELETE FROM players WHERE id = ?", userId);
-  }
-
-  return true;
-}
-
-async function getAllCharacters() {
-  return db.all("SELECT * FROM characters ORDER BY playerId ASC, id ASC");
 }
 
 async function getMaterialsInventory(characterId) {
@@ -616,22 +567,6 @@ async function getFortress(characterId) {
     "SELECT name, level FROM fortresses WHERE characterId = ?",
     characterId
   );
-}
-
-async function setFortress(characterId, name, level) {
-  await db.run(
-    `INSERT INTO fortresses (characterId, name, level)
-     VALUES (?, ?, ?)
-     ON CONFLICT(characterId)
-     DO UPDATE SET name = excluded.name, level = excluded.level`,
-    characterId,
-    name,
-    level
-  );
-}
-
-async function deleteFortress(characterId) {
-  await db.run("DELETE FROM fortresses WHERE characterId = ?", characterId);
 }
 
 async function getWeeklyFarmCount(characterId) {
@@ -674,7 +609,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("scheda_farming")
-    .setDescription("Mostra scheda farming, fortezza e materiali di un tuo PG.")
+    .setDescription("Mostra scheda farming e materiali di un tuo PG.")
     .addStringOption(o =>
       o.setName("nome_pg")
         .setDescription("Nome del tuo PG")
@@ -703,88 +638,8 @@ const commands = [
     .setDescription("Mostra la mappa delle miniere e dei materiali."),
 
   new SlashCommandBuilder()
-    .setName("imposta_fortezza")
-    .setDescription("Imposta o modifica la fortezza di un PG.")
-    .addUserOption(o =>
-      o.setName("giocatore")
-        .setDescription("Giocatore proprietario del PG")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("nome_pg")
-        .setDescription("Nome del PG")
-        .setRequired(true)
-        .setAutocomplete(true)
-    )
-    .addStringOption(o =>
-      o.setName("nome_fortezza")
-        .setDescription("Nome della fortezza")
-        .setRequired(true)
-    )
-    .addIntegerOption(o =>
-      o.setName("livello")
-        .setDescription("Livello fortezza 0-5")
-        .setRequired(true)
-        .setMinValue(0)
-        .setMaxValue(5)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("rimuovi_fortezza")
-    .setDescription("Rimuove la fortezza di un PG.")
-    .addUserOption(o =>
-      o.setName("giocatore")
-        .setDescription("Giocatore proprietario del PG")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("nome_pg")
-        .setDescription("Nome del PG")
-        .setRequired(true)
-        .setAutocomplete(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("addpg")
-    .setDescription("Crea un PG nel database condiviso.")
-    .addUserOption(o =>
-      o.setName("giocatore")
-        .setDescription("Giocatore proprietario del PG")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("nome_pg")
-        .setDescription("Nome del nuovo PG")
-        .setRequired(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("delpg")
-    .setDescription("Elimina un PG dal database condiviso.")
-    .addUserOption(o =>
-      o.setName("giocatore")
-        .setDescription("Giocatore proprietario del PG")
-        .setRequired(true)
-    )
-    .addStringOption(o =>
-      o.setName("nome_pg")
-        .setDescription("Nome del PG")
-        .setRequired(true)
-        .setAutocomplete(true)
-    ),
-
-  new SlashCommandBuilder()
-    .setName("listapg")
-    .setDescription("Lista i PG registrati.")
-    .addUserOption(o =>
-      o.setName("giocatore")
-        .setDescription("Giocatore specifico da controllare")
-        .setRequired(false)
-    ),
-
-  new SlashCommandBuilder()
     .setName("addminiera")
-    .setDescription("Crea una nuova miniera.")
+    .setDescription("Crea una nuova miniera. Solo gm-bot.")
     .addStringOption(o =>
       o.setName("nome")
         .setDescription("Nome della miniera")
@@ -793,7 +648,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("delminiera")
-    .setDescription("Elimina una miniera.")
+    .setDescription("Elimina una miniera. Solo gm-bot.")
     .addStringOption(o =>
       o.setName("nome")
         .setDescription("Nome della miniera")
@@ -803,7 +658,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("addmat")
-    .setDescription("Aggiunge un materiale a una miniera.")
+    .setDescription("Aggiunge un materiale a una miniera. Solo gm-bot.")
     .addStringOption(o =>
       o.setName("miniera")
         .setDescription("Nome della miniera")
@@ -837,7 +692,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("delmat")
-    .setDescription("Rimuove un materiale da una miniera.")
+    .setDescription("Rimuove un materiale da una miniera. Solo gm-bot.")
     .addStringOption(o =>
       o.setName("miniera")
         .setDescription("Nome della miniera")
@@ -864,7 +719,9 @@ const commands = [
 
 // === FARM CORE ===
 
-async function eseguiFarm(interaction, pg, fortezza, materiale, miniera, rarita, mestieri = [], tags = "") {
+async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rarita, mestieri = [], tags = "") {
+  const fortezza = getEffectiveFortress(fortezzaRaw);
+
   const livFort = fortezza.level;
   const nomeFort = fortezza.name;
   const dado = randInt(1, 10);
@@ -954,18 +811,11 @@ client.on("interactionCreate", async interaction => {
       const miniere = caricaMiniere();
 
       if (focused.name === "nome_pg") {
-        let user = interaction.user;
+        const pgs = await getPersonaggiUtente(interaction.user.id);
 
-        const selectedUser =
-          interaction.options.getUser("giocatore") ||
-          interaction.options.getUser("utente");
-
-        if (selectedUser) user = selectedUser;
-
-        const pgs = await getPersonaggiUtente(user.id);
         const filtered = pgs
           .map(pg => pg.name)
-          .filter(name => name.toLowerCase().startsWith(focused.value.toLowerCase()))
+          .filter(name => normalizeText(name).startsWith(normalizeText(focused.value)))
           .slice(0, 25);
 
         return interaction.respond(filtered.map(name => ({ name, value: name })));
@@ -973,6 +823,7 @@ client.on("interactionCreate", async interaction => {
 
       if (focused.name === "materiale") {
         const materiali = tuttiNomiMateriali(miniere);
+
         const filtered = materiali
           .filter(m => normalizeText(m).includes(normalizeText(focused.value)))
           .slice(0, 25);
@@ -982,6 +833,7 @@ client.on("interactionCreate", async interaction => {
 
       if (focused.name === "miniera" || focused.name === "nome") {
         const nomi = tuttiNomiMiniere(miniere);
+
         const filtered = nomi
           .filter(m => normalizeText(m).includes(normalizeText(focused.value)))
           .slice(0, 25);
@@ -995,11 +847,33 @@ client.on("interactionCreate", async interaction => {
     if (!interaction.isChatInputCommand()) return;
 
     const command = interaction.commandName;
-    const isBeta = hasBetaRole(interaction.member);
+    const isBeta = hasRole(interaction.member, BETA_ROLE_NAME);
+    const isGM = hasRole(interaction.member, GM_ROLE_NAME);
 
-    if (!isBeta) {
+    const betaCommands = [
+      "aiuto_miniere",
+      "scheda_farming",
+      "farm",
+      "materiali"
+    ];
+
+    const gmCommands = [
+      "addminiera",
+      "delminiera",
+      "addmat",
+      "delmat"
+    ];
+
+    if (betaCommands.includes(command) && !isBeta && !isGM) {
       return interaction.reply({
         content: `🚫 Serve il ruolo **${BETA_ROLE_NAME}**, verme. — **${NOME_BOT}**`,
+        ephemeral: true
+      });
+    }
+
+    if (gmCommands.includes(command) && !isGM) {
+      return interaction.reply({
+        content: `🚫 Questo comando è roba da **${GM_ROLE_NAME}**, non da apprendisti col piccone. — **${NOME_BOT}**`,
         ephemeral: true
       });
     }
@@ -1014,15 +888,8 @@ client.on("interactionCreate", async interaction => {
             name: "⛏️ Farming",
             value:
               "`/farm nome_pg materiale` — Cerca un materiale\n" +
-              "`/scheda_farming nome_pg` — Vedi fortezza, farm e materiali\n" +
+              "`/scheda_farming nome_pg` — Vedi farm, fortezza e materiali\n" +
               "`/materiali` — Mappa miniere",
-            inline: false
-          },
-          {
-            name: "🏰 Fortezze",
-            value:
-              "`/imposta_fortezza giocatore nome_pg nome_fortezza livello`\n" +
-              "`/rimuovi_fortezza giocatore nome_pg`",
             inline: false
           },
           {
@@ -1031,22 +898,16 @@ client.on("interactionCreate", async interaction => {
               "`/addminiera nome`\n" +
               "`/delminiera nome`\n" +
               "`/addmat miniera materiale rarita tags mestieri`\n" +
-              "`/delmat miniera materiale`",
-            inline: false
-          },
-          {
-            name: "👥 Gestione PG",
-            value:
-              "`/addpg giocatore nome_pg`\n" +
-              "`/delpg giocatore nome_pg`\n" +
-              "`/listapg [giocatore]`",
+              "`/delmat miniera materiale`\n" +
+              `Richiede ruolo **${GM_ROLE_NAME}**.`,
             inline: false
           },
           {
             name: "📆 Limite Farming",
             value:
               "Ogni PG può farmare a settimana un numero di volte pari al suo **bonus competenza**.\n" +
-              "Reset automatico: **lunedì a mezzanotte**.",
+              "Reset automatico: **lunedì a mezzanotte**.\n" +
+              "La fortezza non è obbligatoria: se manca, vale **Nessuna fortezza (Lv. 0)**.",
             inline: false
           },
           {
@@ -1073,14 +934,10 @@ client.on("interactionCreate", async interaction => {
         });
       }
 
-      const fort = await getFortress(pg.id);
+      const fort = getEffectiveFortress(await getFortress(pg.id));
       const materials = await getMaterialsInventory(pg.id);
       const limit = getProficiencyBonus(pg.level || 1);
       const count = await getWeeklyFarmCount(pg.id);
-
-      const fortInfo = fort
-        ? `🏰 **${fort.name}** (Lv. ${fort.level})`
-        : "🏚️ *Nessuna fortezza*";
 
       const embed = new EmbedBuilder()
         .setTitle(`📋 Scheda Farming — ${pg.name}`)
@@ -1092,7 +949,7 @@ client.on("interactionCreate", async interaction => {
           { name: "🧠 Competenza", value: `+${limit}`, inline: true },
           { name: "📆 Farm Settimanali", value: `${count} / ${limit}`, inline: true },
           { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
-          { name: "🏰 Fortezza", value: fortInfo, inline: false },
+          { name: "🏰 Fortezza", value: `🏰 **${fort.name}** (Lv. ${fort.level})`, inline: false },
           { name: "🧺 Inventario Materiali", value: formatMaterials(materials), inline: false }
         )
         .setFooter({ text: `— ${NOME_BOT}, contabile della tua fatica inutile` });
@@ -1130,17 +987,7 @@ client.on("interactionCreate", async interaction => {
         return interaction.reply({ content: msg, ephemeral: true });
       }
 
-      const fortezza = await getFortress(pg.id);
-
-      if (!fortezza) {
-        return interaction.reply({
-          content: fmt(pick(FRASI_NO_FORTEZZA), {
-            name: `<@${interaction.user.id}>`,
-            pg: pg.name
-          }),
-          ephemeral: true
-        });
-      }
+      const fortezza = getEffectiveFortress(await getFortress(pg.id));
 
       if (!(await canFarmThisWeek(pg))) {
         const count = await getWeeklyFarmCount(pg.id);
@@ -1257,165 +1104,6 @@ client.on("interactionCreate", async interaction => {
       }
 
       return;
-    }
-
-    if (command === "imposta_fortezza") {
-      const user = interaction.options.getUser("giocatore");
-      const nomePg = interaction.options.getString("nome_pg");
-      const nomeFortezza = interaction.options.getString("nome_fortezza");
-      const livello = interaction.options.getInteger("livello");
-
-      const pg = await getPersonaggioByName(user.id, nomePg);
-
-      if (!pg) {
-        return interaction.reply({
-          content: `🤷 **${nomePg}**? Non esiste nel registro di ${user}. Bel tentativo, catasto delle illusioni.`,
-          ephemeral: true
-        });
-      }
-
-      await setFortress(pg.id, nomeFortezza, livello);
-
-      const embed = new EmbedBuilder()
-        .setTitle("🏰 Fortezza Registrata!")
-        .setDescription(`**${pg.name}** ora ha una fortezza. Quasi impressionante. Quasi.`)
-        .setColor(0x2ecc71)
-        .addFields(
-          { name: "👤 Personaggio", value: pg.name, inline: true },
-          { name: "🏰 Fortezza", value: `${nomeFortezza} (Lv. ${livello})`, inline: true }
-        )
-        .setFooter({ text: `— ${NOME_BOT}` });
-
-      return interaction.reply({ content: `${user}`, embeds: [embed] });
-    }
-
-    if (command === "rimuovi_fortezza") {
-      const user = interaction.options.getUser("giocatore");
-      const nomePg = interaction.options.getString("nome_pg");
-
-      const pg = await getPersonaggioByName(user.id, nomePg);
-
-      if (!pg) {
-        return interaction.reply({
-          content: `🤷 **${nomePg}**? Non esiste nel registro di ${user}.`,
-          ephemeral: true
-        });
-      }
-
-      await deleteFortress(pg.id);
-
-      return interaction.reply(`🏚️ Fortezza rimossa da **${pg.name}**. Ora è ufficialmente un senzatetto del crafting.`);
-    }
-
-    if (command === "addpg") {
-      const user = interaction.options.getUser("giocatore");
-      const nomePg = interaction.options.getString("nome_pg").trim();
-
-      const existing = await getPersonaggioByName(user.id, nomePg);
-
-      if (existing) {
-        return interaction.reply({
-          content: `⚠️ **${nomePg}** esiste già per ${user}. Non moltiplichiamo i disastri.`,
-          ephemeral: true
-        });
-      }
-
-      const pgs = await getPersonaggiUtente(user.id);
-
-      if (pgs.length >= 3) {
-        return interaction.reply({
-          content: `⚠️ ${user} ha già 3 PG attivi. Tre tragedie bastano e avanzano.`,
-          ephemeral: true
-        });
-      }
-
-      const pg = await aggiungiPgDB(user, nomePg);
-
-      return interaction.reply(
-        `✅ Personaggio **${nomePg}** creato per ${user}. ID: ${pg.id}\n` +
-        `Ora dagli una fortezza con \`/imposta_fortezza\`, se proprio vuoi mandarlo a sporcarsi.`
-      );
-    }
-
-    if (command === "delpg") {
-      const user = interaction.options.getUser("giocatore");
-      const nomePg = interaction.options.getString("nome_pg");
-
-      if (await rimuoviPgDB(user.id, nomePg)) {
-        return interaction.reply(`💥 **${nomePg}** di ${user} eliminato. Una cartella in meno, un fallimento in meno.`);
-      }
-
-      return interaction.reply({
-        content: `⚠️ **${nomePg}** non trovato per ${user}.`,
-        ephemeral: true
-      });
-    }
-
-    if (command === "listapg") {
-      const user = interaction.options.getUser("giocatore");
-
-      if (user) {
-        const pgs = await getPersonaggiUtente(user.id);
-
-        if (!pgs.length) {
-          return interaction.reply({
-            content: `📋 ${user} non ha PG. Finalmente un registro pulito.`,
-            ephemeral: true
-          });
-        }
-
-        const embed = new EmbedBuilder()
-          .setTitle(`📋 PG di ${user.username}`)
-          .setColor(0x3498db);
-
-        for (const pg of pgs) {
-          const f = await getFortress(pg.id);
-          const limit = getProficiencyBonus(pg.level || 1);
-          const count = await getWeeklyFarmCount(pg.id);
-
-          embed.addFields({
-            name: `ID ${pg.id} — ${pg.name}`,
-            value:
-              `Lv. ${pg.level} | Comp. +${limit} | Farm settimana ${count}/${limit} | ` +
-              `${f ? `🏰 ${f.name} (Lv. ${f.level})` : "🏚️ Nessuna"}`,
-            inline: false
-          });
-        }
-
-        return interaction.reply({ embeds: [embed] });
-      }
-
-      const rows = await getAllCharacters();
-
-      if (!rows.length) {
-        return interaction.reply({
-          content: "📋 Nessun PG registrato. Il silenzio. La pace. Quasi mi commuovo.",
-          ephemeral: true
-        });
-      }
-
-      const embed = new EmbedBuilder()
-        .setTitle("📋 Tutti i PG")
-        .setColor(0x3498db);
-
-      const byUser = {};
-
-      for (const pg of rows) {
-        byUser[pg.playerId] ??= [];
-        byUser[pg.playerId].push(pg);
-      }
-
-      for (const [uid, pgs] of Object.entries(byUser)) {
-        embed.addFields({
-          name: `👤 User ID: ${uid}`,
-          value: pgs
-            .map(pg => `**${pg.name}** (ID ${pg.id}, Lv. ${pg.level}, Comp. +${getProficiencyBonus(pg.level || 1)})`)
-            .join(", "),
-          inline: false
-        });
-      }
-
-      return interaction.reply({ embeds: [embed] });
     }
 
     if (command === "addminiera") {
