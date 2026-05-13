@@ -36,9 +36,11 @@ if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
 const dataDir = path.join(__dirname, "data");
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-const MINIERE_FILE = fs.existsSync(path.join(__dirname, "data", "miniere.json"))
-  ? path.join(__dirname, "data", "miniere.json")
-  : path.join(__dirname, "miniere.json");
+const MINIERE_FILE =
+  process.env.MINIERE_FILE_PATH?.trim() ||
+  (fs.existsSync(path.join(__dirname, "data", "miniere.json"))
+    ? path.join(__dirname, "data", "miniere.json")
+    : path.join(__dirname, "miniere.json"));
 
 let db;
 
@@ -206,7 +208,7 @@ function randInt(min, max) {
 
 function capitalize(s) {
   if (!s) return "";
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  return String(s).charAt(0).toUpperCase() + String(s).slice(1);
 }
 
 function fmt(template, vars) {
@@ -244,6 +246,15 @@ function loadJSON(filepath, defaultVal = {}) {
 
 function saveJSON(filepath, data) {
   fs.writeFileSync(filepath, JSON.stringify(data, null, 2), "utf-8");
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
 }
 
 function getProficiencyBonus(level) {
@@ -284,11 +295,6 @@ function getCurrentWeekStartKey() {
   return localDateAsUTC.toISOString().slice(0, 10);
 }
 
-function formatMaterials(rows) {
-  if (!rows.length) return "Vuoto";
-  return rows.map(r => `${r.quantity}x ${capitalize(r.material)}`).join(", ");
-}
-
 function caricaMiniere() {
   const data = loadJSON(MINIERE_FILE);
   const numMiniere = Object.keys(data).length;
@@ -301,25 +307,126 @@ function caricaMiniere() {
 }
 
 function getNome(mat) {
-  return typeof mat === "object" ? mat.nome.toLowerCase() : mat.toLowerCase();
+  if (typeof mat === "object" && mat !== null) {
+    return normalizeText(mat.nome || mat.name || mat.materiale || mat.material || "");
+  }
+
+  return normalizeText(mat);
+}
+
+function getNomeDisplay(mat) {
+  if (typeof mat === "object" && mat !== null) {
+    return String(mat.nome || mat.name || mat.materiale || mat.material || "").trim();
+  }
+
+  return String(mat || "").trim();
 }
 
 function getMestieri(mat) {
-  return typeof mat === "object" ? (mat.mestieri || []) : [];
+  if (typeof mat !== "object" || mat === null) return [];
+
+  const raw =
+    mat.mestieri ??
+    mat.mestiere ??
+    mat.professioni ??
+    mat.professione ??
+    mat.craft ??
+    [];
+
+  if (Array.isArray(raw)) {
+    return raw.map(x => String(x).trim()).filter(Boolean);
+  }
+
+  if (typeof raw === "string") {
+    return raw
+      .split(",")
+      .map(x => x.trim())
+      .filter(Boolean);
+  }
+
+  return [];
 }
 
 function getTags(mat) {
-  return typeof mat === "object" ? (mat.tags || "") : "";
+  if (typeof mat !== "object" || mat === null) return "";
+
+  const raw =
+    mat.tags ??
+    mat.tag ??
+    mat.tipo ??
+    mat.categoria ??
+    "";
+
+  if (Array.isArray(raw)) {
+    return raw.filter(Boolean).join(", ");
+  }
+
+  return String(raw || "").trim();
+}
+
+function findMaterialMetadata(materialName) {
+  const miniere = caricaMiniere();
+  const target = normalizeText(materialName);
+
+  for (const dati of Object.values(miniere)) {
+    const comuni = Array.isArray(dati.comuni) ? dati.comuni : [];
+    const nonComuni = Array.isArray(dati.non_comuni) ? dati.non_comuni : [];
+    const nonComuniAlt = Array.isArray(dati.nonComuni) ? dati.nonComuni : [];
+
+    for (const mat of [...comuni, ...nonComuni, ...nonComuniAlt]) {
+      if (getNome(mat) === target) {
+        return {
+          nome: getNomeDisplay(mat) || String(materialName),
+          tags: getTags(mat),
+          mestieri: getMestieri(mat)
+        };
+      }
+    }
+  }
+
+  return {
+    nome: String(materialName || "").trim(),
+    tags: "",
+    mestieri: []
+  };
+}
+
+function formatMaterialWithMetadata(row) {
+  const meta = findMaterialMetadata(row.material);
+
+  const tags = meta.tags ? `${meta.tags} ` : "";
+  const mestieri = meta.mestieri.length
+    ? ` [${meta.mestieri.map(capitalize).join(", ")}]`
+    : "";
+
+  return `${row.quantity}x ${tags}${capitalize(meta.nome || row.material)}${mestieri}`;
+}
+
+function formatMaterials(rows) {
+  if (!rows.length) return "Vuoto";
+  return rows.map(formatMaterialWithMetadata).join(", ");
+}
+
+function formatMaterialNameForEmbed(materiale, tags = "", mestieri = []) {
+  const tagText = tags ? `${tags} ` : "";
+  const mestieriText = mestieri.length
+    ? ` [${mestieri.map(capitalize).join(", ")}]`
+    : "";
+
+  return `${tagText}${capitalize(materiale)}${mestieriText}`;
 }
 
 function trovaMateriale(miniere, nomeMat) {
-  const nl = nomeMat.toLowerCase();
+  const nl = normalizeText(nomeMat);
 
   for (const [miniera, dati] of Object.entries(miniere)) {
     for (const mat of (dati.comuni || [])) {
       if (getNome(mat) === nl) {
+        const display = getNomeDisplay(mat);
+
         return {
           miniera,
+          materiale: display || nomeMat,
           rarita: "comuni",
           mestieri: getMestieri(mat),
           tags: getTags(mat)
@@ -329,8 +436,11 @@ function trovaMateriale(miniere, nomeMat) {
 
     for (const mat of (dati.non_comuni || [])) {
       if (getNome(mat) === nl) {
+        const display = getNomeDisplay(mat);
+
         return {
           miniera,
+          materiale: display || nomeMat,
           rarita: "non_comuni",
           mestieri: getMestieri(mat),
           tags: getTags(mat)
@@ -347,7 +457,8 @@ function tuttiNomiMateriali(miniere) {
 
   for (const dati of Object.values(miniere)) {
     for (const mat of [...(dati.comuni || []), ...(dati.non_comuni || [])]) {
-      nomi.add(getNome(mat));
+      const nome = getNomeDisplay(mat) || getNome(mat);
+      if (nome) nomi.add(nome.toLowerCase());
     }
   }
 
@@ -359,20 +470,22 @@ function tuttiNomiMiniere(miniere) {
 }
 
 function suggerisciMateriale(miniere, input, max = 3) {
-  const il = input.toLowerCase();
+  const il = normalizeText(input);
   const nomi = tuttiNomiMateriali(miniere);
   const sugg = [];
 
   for (const nome of nomi) {
-    if (il.includes(nome) || nome.includes(il)) {
+    const normalizedNome = normalizeText(nome);
+
+    if (il.includes(normalizedNome) || normalizedNome.includes(il)) {
       sugg.push([0, nome]);
       continue;
     }
 
     let cs = 0;
 
-    for (let i = 0; i < Math.min(il.length, nome.length); i++) {
-      if (il[i] === nome[i]) cs++;
+    for (let i = 0; i < Math.min(il.length, normalizedNome.length); i++) {
+      if (il[i] === normalizedNome[i]) cs++;
       else break;
     }
 
@@ -382,7 +495,7 @@ function suggerisciMateriale(miniere, input, max = 3) {
     }
 
     const pi = new Set(il.split(" "));
-    const pn = new Set(nome.split(" "));
+    const pn = new Set(normalizedNome.split(" "));
 
     if ([...pi].some(w => pn.has(w))) {
       sugg.push([2, nome]);
@@ -493,7 +606,7 @@ async function addMaterialToInventory(characterId, materiale, quantita) {
      ON CONFLICT(characterId, material)
      DO UPDATE SET quantity = quantity + excluded.quantity`,
     characterId,
-    materiale.toLowerCase(),
+    normalizeText(materiale),
     quantita
   );
 }
@@ -758,16 +871,19 @@ async function eseguiFarm(interaction, pg, fortezza, materiale, miniera, rarita,
   const totale = dado + livFort;
   const quantita = calcolaRisultato(dado, livFort, rarita);
 
+  const materialToStore = normalizeText(materiale);
+
   await incrementWeeklyFarmCount(pg.id);
 
   if (quantita > 0) {
-    await addMaterialToInventory(pg.id, materiale, quantita);
+    await addMaterialToInventory(pg.id, materialToStore, quantita);
   }
 
   const farmCount = await getWeeklyFarmCount(pg.id);
   const farmLimit = getProficiencyBonus(pg.level || 1);
 
   const matDisplay = capitalize(materiale);
+  const matFullDisplay = formatMaterialNameForEmbed(materiale, tags, mestieri);
   const nomePg = pg.name;
   const dataRicerca = nowRome();
   const v = { pg: nomePg, mat: matDisplay, miniera, q: quantita, ora: dataRicerca };
@@ -785,7 +901,6 @@ async function eseguiFarm(interaction, pg, fortezza, materiale, miniera, rarita,
   }
 
   const tipoRar = rarita === "comuni" ? "⚪ Comune" : "🟣 Non Comune";
-  const matConTag = tags ? `${tags} ${matDisplay}` : matDisplay;
 
   const embed = new EmbedBuilder()
     .setTitle(`📜 ${NOME_BOT} — Rapporto di Ricerca`)
@@ -795,14 +910,19 @@ async function eseguiFarm(interaction, pg, fortezza, materiale, miniera, rarita,
       { name: "👤 Personaggio", value: nomePg, inline: true },
       { name: "🏰 Fortezza", value: `${nomeFort} (Lv. ${livFort})`, inline: true },
       { name: "⛏️ Luogo di Ricerca", value: miniera, inline: true },
-      { name: "🔍 Materiale Cercato", value: `${matConTag} (${tipoRar})`, inline: true },
+      { name: "🔍 Materiale Cercato", value: `${matFullDisplay} (${tipoRar})`, inline: true },
+      {
+        name: "🛠️ Mestieri",
+        value: mestieri.length ? mestieri.map(capitalize).join(", ") : "Nessuno indicato",
+        inline: true
+      },
       { name: "📦 Quantità Raccolta", value: `**${quantita}**`, inline: true },
       {
         name: "🧺 Inventario Materiali",
         value: quantita > 0
-          ? `Aggiunto automaticamente: **${quantita}x ${matDisplay}**`
+          ? `Aggiunto automaticamente: **${quantita}x ${matFullDisplay}**`
           : "Nessun materiale aggiunto, perché evidentemente oggi il piccone era decorativo.",
-        inline: true
+        inline: false
       },
       { name: "📆 Farm Settimanali", value: `${farmCount} / ${farmLimit}`, inline: true },
       { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
@@ -854,7 +974,7 @@ client.on("interactionCreate", async interaction => {
       if (focused.name === "materiale") {
         const materiali = tuttiNomiMateriali(miniere);
         const filtered = materiali
-          .filter(m => m.toLowerCase().includes(focused.value.toLowerCase()))
+          .filter(m => normalizeText(m).includes(normalizeText(focused.value)))
           .slice(0, 25);
 
         return interaction.respond(filtered.map(m => ({ name: capitalize(m), value: m })));
@@ -863,7 +983,7 @@ client.on("interactionCreate", async interaction => {
       if (focused.name === "miniera" || focused.name === "nome") {
         const nomi = tuttiNomiMiniere(miniere);
         const filtered = nomi
-          .filter(m => m.toLowerCase().includes(focused.value.toLowerCase()))
+          .filter(m => normalizeText(m).includes(normalizeText(focused.value)))
           .slice(0, 25);
 
         return interaction.respond(filtered.map(m => ({ name: m, value: m })));
@@ -910,7 +1030,7 @@ client.on("interactionCreate", async interaction => {
             value:
               "`/addminiera nome`\n" +
               "`/delminiera nome`\n" +
-              "`/addmat miniera materiale rarita`\n" +
+              "`/addmat miniera materiale rarita tags mestieri`\n" +
               "`/delmat miniera materiale`",
             inline: false
           },
@@ -982,7 +1102,7 @@ client.on("interactionCreate", async interaction => {
 
     if (command === "farm") {
       const nomePg = interaction.options.getString("nome_pg");
-      const materiale = interaction.options.getString("materiale").trim().toLowerCase();
+      const materiale = interaction.options.getString("materiale").trim();
 
       const pg = await getPersonaggioByName(interaction.user.id, nomePg);
 
@@ -1039,7 +1159,7 @@ client.on("interactionCreate", async interaction => {
         interaction,
         pg,
         fortezza,
-        materiale,
+        trovato.materiale,
         trovato.miniera,
         trovato.rarita,
         trovato.mestieri,
@@ -1063,12 +1183,16 @@ client.on("interactionCreate", async interaction => {
 
         for (const m of (dati.comuni || [])) {
           const mestStr = getMestieri(m).map(capitalize).join(", ");
-          valore += `⚪ ${getTags(m)} ${capitalize(getNome(m))}${mestStr ? ` *(${mestStr})*` : ""}\n`;
+          const tags = getTags(m);
+          const nome = getNomeDisplay(m);
+          valore += `⚪ ${tags ? `${tags} ` : ""}${capitalize(nome)}${mestStr ? ` *(${mestStr})*` : ""}\n`;
         }
 
         for (const m of (dati.non_comuni || [])) {
           const mestStr = getMestieri(m).map(capitalize).join(", ");
-          valore += `🟣 ${getTags(m)} ${capitalize(getNome(m))}${mestStr ? ` *(${mestStr})*` : ""}\n`;
+          const tags = getTags(m);
+          const nome = getNomeDisplay(m);
+          valore += `🟣 ${tags ? `${tags} ` : ""}${capitalize(nome)}${mestStr ? ` *(${mestStr})*` : ""}\n`;
         }
 
         if (!valore) valore = "Vuota. Come certe promesse dei giocatori.";
@@ -1349,7 +1473,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       const alreadyExists = [...(miniere[nomeMin].comuni || []), ...(miniere[nomeMin].non_comuni || [])]
-        .some(m => getNome(m) === mat);
+        .some(m => getNome(m) === normalizeText(mat));
 
       if (alreadyExists) {
         return interaction.reply({
@@ -1370,8 +1494,11 @@ client.on("interactionCreate", async interaction => {
       saveJSON(MINIERE_FILE, miniere);
 
       const tipo = rar === "comuni" ? "⚪ Comune" : "🟣 Non Comune";
+      const extra = tags || mestieri.length
+        ? `\nTag: ${tags || "Nessuno"}\nMestieri: ${mestieri.length ? mestieri.map(capitalize).join(", ") : "Nessuno"}`
+        : "";
 
-      return interaction.reply(`✅ **${capitalize(mat)}** (${tipo}) aggiunto a **${nomeMin}**! Grumni approva. Malvolentieri.`);
+      return interaction.reply(`✅ **${capitalize(mat)}** (${tipo}) aggiunto a **${nomeMin}**! Grumni approva. Malvolentieri.${extra}`);
     }
 
     if (command === "delmat") {
@@ -1389,7 +1516,7 @@ client.on("interactionCreate", async interaction => {
       let rimosso = false;
 
       for (const r of ["comuni", "non_comuni"]) {
-        const idx = miniere[nomeMin][r].findIndex(m => getNome(m) === mat);
+        const idx = miniere[nomeMin][r].findIndex(m => getNome(m) === normalizeText(mat));
 
         if (idx !== -1) {
           miniere[nomeMin][r].splice(idx, 1);
