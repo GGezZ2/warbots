@@ -61,6 +61,31 @@ async function initDB() {
       UNIQUE(characterId, date),
       FOREIGN KEY (characterId) REFERENCES characters(id)
   );
+
+  CREATE TABLE IF NOT EXISTS weekly_farms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      characterId INTEGER NOT NULL,
+      weekStart TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(characterId, weekStart),
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS materials_inventory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      characterId INTEGER NOT NULL,
+      material TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(characterId, material),
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+  );
+
+  CREATE TABLE IF NOT EXISTS fortresses (
+      characterId INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      level INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+  );
   `);
 
   console.log(`SQLite inizializzato: ${DB_PATH}`);
@@ -101,6 +126,48 @@ function getProficiencyBonus(level) {
   return 2;
 }
 
+function getRomeDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Rome",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const get = type => Number(parts.find(p => p.type === type).value);
+
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day")
+  };
+}
+
+function getCurrentWeekStartKey() {
+  const { year, month, day } = getRomeDateParts();
+
+  const localDateAsUTC = new Date(Date.UTC(year, month - 1, day));
+  const dayOfWeek = localDateAsUTC.getUTCDay();
+
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+
+  localDateAsUTC.setUTCDate(localDateAsUTC.getUTCDate() - daysSinceMonday);
+
+  return localDateAsUTC.toISOString().slice(0, 10);
+}
+
+async function getWeeklyFarmCount(characterId) {
+  const weekStart = getCurrentWeekStartKey();
+
+  const row = await db.get(
+    "SELECT count FROM weekly_farms WHERE characterId = ? AND weekStart = ?",
+    characterId,
+    weekStart
+  );
+
+  return row?.count || 0;
+}
+
 const LEVEL_UP_LINES = [
   "È salito di livello. Miracolo: apparentemente sopravvivere facendo scelte discutibili funziona.",
   "Nuovo livello raggiunto. Qualcuno avvisi i nemici: ora è leggermente meno imbarazzante.",
@@ -116,6 +183,15 @@ const LEVEL_UP_LINES = [
 
 function randomLevelUpLine() {
   return LEVEL_UP_LINES[Math.floor(Math.random() * LEVEL_UP_LINES.length)];
+}
+
+function formatList(list, emptyText = "Vuoto") {
+  return list.length ? list.join(", ") : emptyText;
+}
+
+function formatMaterials(rows) {
+  if (!rows.length) return "Vuoto";
+  return rows.map(r => `${r.quantity}x ${r.material}`).join(", ");
 }
 
 async function ensurePlayer(user) {
@@ -176,6 +252,9 @@ async function deleteCharacterAndData(characterId) {
   await db.run("DELETE FROM inventory WHERE characterId = ?", characterId);
   await db.run("DELETE FROM attunements WHERE characterId = ?", characterId);
   await db.run("DELETE FROM daily_farms WHERE characterId = ?", characterId);
+  await db.run("DELETE FROM weekly_farms WHERE characterId = ?", characterId);
+  await db.run("DELETE FROM materials_inventory WHERE characterId = ?", characterId);
+  await db.run("DELETE FROM fortresses WHERE characterId = ?", characterId);
   await db.run("DELETE FROM characters WHERE id = ?", characterId);
 }
 
@@ -183,6 +262,9 @@ async function resetAllCharacters() {
   await db.run("DELETE FROM inventory");
   await db.run("DELETE FROM attunements");
   await db.run("DELETE FROM daily_farms");
+  await db.run("DELETE FROM weekly_farms");
+  await db.run("DELETE FROM materials_inventory");
+  await db.run("DELETE FROM fortresses");
   await db.run("DELETE FROM characters");
   await db.run("DELETE FROM players");
 }
@@ -218,6 +300,77 @@ async function addAttunement(characterId, item) {
 
 async function clearAttunementByName(characterId, item) {
   await db.run("DELETE FROM attunements WHERE characterId = ? AND item = ?", characterId, item);
+}
+
+async function getMaterialsInventory(characterId) {
+  return db.all(
+    "SELECT material, quantity FROM materials_inventory WHERE characterId = ? AND quantity > 0 ORDER BY material ASC",
+    characterId
+  );
+}
+
+async function addMaterialToInventory(characterId, material, quantity) {
+  await db.run(
+    `INSERT INTO materials_inventory (characterId, material, quantity)
+     VALUES (?, ?, ?)
+     ON CONFLICT(characterId, material)
+     DO UPDATE SET quantity = quantity + excluded.quantity`,
+    characterId,
+    material,
+    quantity
+  );
+}
+
+async function removeMaterialFromInventory(characterId, material, quantity) {
+  const row = await db.get(
+    "SELECT quantity FROM materials_inventory WHERE characterId = ? AND lower(material) = lower(?)",
+    characterId,
+    material
+  );
+
+  if (!row || row.quantity < quantity) return false;
+
+  const newQty = row.quantity - quantity;
+
+  if (newQty <= 0) {
+    await db.run(
+      "DELETE FROM materials_inventory WHERE characterId = ? AND lower(material) = lower(?)",
+      characterId,
+      material
+    );
+  } else {
+    await db.run(
+      "UPDATE materials_inventory SET quantity = ? WHERE characterId = ? AND lower(material) = lower(?)",
+      newQty,
+      characterId,
+      material
+    );
+  }
+
+  return true;
+}
+
+async function getFortress(characterId) {
+  return db.get(
+    "SELECT name, level FROM fortresses WHERE characterId = ?",
+    characterId
+  );
+}
+
+async function setFortress(characterId, name, level) {
+  await db.run(
+    `INSERT INTO fortresses (characterId, name, level)
+     VALUES (?, ?, ?)
+     ON CONFLICT(characterId)
+     DO UPDATE SET name = excluded.name, level = excluded.level`,
+    characterId,
+    name,
+    level
+  );
+}
+
+async function deleteFortress(characterId) {
+  await db.run("DELETE FROM fortresses WHERE characterId = ?", characterId);
 }
 
 async function transferBankMoney(fromCharacterId, toCharacterId, amount) {
@@ -301,7 +454,7 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("reset")
-    .setDescription("Elimina TUTTE le schede PG, inventari, sintonie e farm giornalieri.")
+    .setDescription("Elimina TUTTE le schede PG, inventari, materiali, fortezze, sintonie e farm settimanali.")
     .addStringOption(o => o.setName("conferma").setDescription("Scrivi RESET per confermare").setRequired(true)),
 
   new SlashCommandBuilder()
@@ -380,6 +533,20 @@ const commands = [
     .addStringOption(o => o.setName("nome").setDescription("Nome del PG").setRequired(true).setAutocomplete(true)),
 
   new SlashCommandBuilder()
+    .setName("imposta_fortezza")
+    .setDescription("Imposta o modifica manualmente la fortezza di un PG.")
+    .addUserOption(o => o.setName("giocatore").setDescription("Il giocatore proprietario del PG").setRequired(true))
+    .addStringOption(o => o.setName("nome").setDescription("Nome del PG").setRequired(true).setAutocomplete(true))
+    .addStringOption(o => o.setName("nome_fortezza").setDescription("Nome della fortezza").setRequired(true))
+    .addIntegerOption(o => o.setName("livello").setDescription("Livello fortezza 0-5").setRequired(true).setMinValue(0).setMaxValue(5)),
+
+  new SlashCommandBuilder()
+    .setName("rimuovi_fortezza")
+    .setDescription("Rimuove la fortezza associata a un PG.")
+    .addUserOption(o => o.setName("giocatore").setDescription("Il giocatore proprietario del PG").setRequired(true))
+    .addStringOption(o => o.setName("nome").setDescription("Nome del PG").setRequired(true).setAutocomplete(true)),
+
+  new SlashCommandBuilder()
     .setName("lista_pg")
     .setDescription("Lista tutti i PG di un giocatore.")
     .addUserOption(o => o.setName("giocatore").setDescription("Il giocatore").setRequired(true))
@@ -397,7 +564,7 @@ const commands = [
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-client.on("ready", () => {
+client.on("clientReady", () => {
   console.log(`Westmarch Bot attivo come: ${client.user.tag}`);
 });
 
@@ -430,25 +597,26 @@ async function handleLevelUpIfAny(characterId, oldXP, interaction) {
     `<@${character.playerId}> 🎉 **${character.name} è salito al livello ${newLevel}!**\n` +
     `_${randomLevelUpLine()}_`;
 
-  let channel = null;
+  const channelId = process.env.LEVEL_UP_CHANNEL?.trim();
 
-  if (process.env.LEVEL_UP_CHANNEL) {
-    channel = client.channels.cache.get(process.env.LEVEL_UP_CHANNEL);
-  }
-
-  if (!channel && interaction?.guild) {
-    channel = interaction.guild.channels.cache.find(
-      c => c.name?.toLowerCase().includes("level")
-    );
+  if (!channelId) {
+    return msg;
   }
 
   try {
-    if (channel) await channel.send({ content: msg });
-  } catch (e) {
-    console.error("Errore notifica level up:", e.message);
-  }
+    const channel = await client.channels.fetch(channelId);
 
-  return msg;
+    if (!channel) {
+      console.error(`LEVEL_UP_CHANNEL non trovato: ${channelId}`);
+      return msg;
+    }
+
+    await channel.send({ content: msg });
+    return null;
+  } catch (error) {
+    console.error(`Errore invio level-up nel canale ${channelId}:`, error);
+    return msg;
+  }
 }
 
 client.on("interactionCreate", async interaction => {
@@ -514,8 +682,11 @@ client.on("interactionCreate", async interaction => {
       if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
 
       const inventory = await getInventory(pg.id);
+      const materials = await getMaterialsInventory(pg.id);
+      const fortress = await getFortress(pg.id);
       const sintonie = await getAttunements(pg.id);
       const proficiencyBonus = getProficiencyBonus(pg.level);
+      const weeklyFarmCount = await getWeeklyFarmCount(pg.id);
 
       const invDisplay = inventory.length
         ? inventory.map(i => {
@@ -525,18 +696,25 @@ client.on("interactionCreate", async interaction => {
           }).join(", ")
         : "Vuoto";
 
+      const fortressDisplay = fortress
+        ? `${fortress.name} (Lv. ${fortress.level})`
+        : "Nessuna";
+
       return interaction.reply({
         content:
           `📜 **Scheda di ${pg.name}**\n` +
           `ID PG: ${pg.id}\n` +
           `Livello: ${pg.level}\n` +
           `Bonus competenza: +${proficiencyBonus}\n` +
-          `Farm giornalieri massimi: ${proficiencyBonus}\n` +
+          `Farm settimanali: ${weeklyFarmCount} / ${proficiencyBonus}\n` +
+          `Reset farm: lunedì a mezzanotte\n` +
           `XP: ${pg.xp}\n` +
           `Gold in tasca: ${pg.gold}\n` +
           `Deposito bancario: ${pg.bank}\n` +
-          `Sintonie: ${sintonie.length ? sintonie.join(", ") : "Nessuna"}\n` +
-          `Inventario: ${invDisplay}`,
+          `Fortezza: ${fortressDisplay}\n` +
+          `Sintonie: ${formatList(sintonie, "Nessuna")}\n` +
+          `Inventario: ${invDisplay}\n` +
+          `Inventario materiali: ${formatMaterials(materials)}`,
         ephemeral: false
       });
     }
@@ -575,7 +753,7 @@ client.on("interactionCreate", async interaction => {
         `Sessione grado **${grade}** completata!\n` +
         `${pg.name} guadagna: **${reward.xp} XP** e **${reward.gold} oro**.`;
 
-      if (levelMsg && !process.env.LEVEL_UP_CHANNEL) response += `\n\n${levelMsg}`;
+      if (levelMsg) response += `\n\n${levelMsg}`;
 
       return interaction.reply(response);
     }
@@ -604,7 +782,7 @@ client.on("interactionCreate", async interaction => {
 
         const levelMsg = await handleLevelUpIfAny(pg.id, before, interaction);
         let response = `${user.username} - PG **${pg.name}**: XP ${before} → ${newXP}. Nota: ${note}`;
-        if (levelMsg && !process.env.LEVEL_UP_CHANNEL) response += `\n\n${levelMsg}`;
+        if (levelMsg) response += `\n\n${levelMsg}`;
 
         return interaction.reply(response);
       }
@@ -979,6 +1157,42 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply(`${user.username} - PG **${pg.name}**: Rimossa sintonia: ${sint}.`);
     }
 
+    if (command === "imposta_fortezza") {
+      if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
+
+      const user = interaction.options.getUser("giocatore");
+      const name = interaction.options.getString("nome");
+      const fortressName = interaction.options.getString("nome_fortezza");
+      const level = interaction.options.getInteger("livello");
+
+      const pg = await getCharacter(user.id, name);
+      if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
+
+      await setFortress(pg.id, fortressName, level);
+
+      return interaction.reply({
+        content: `🏰 Fortezza impostata per **${pg.name}**: **${fortressName}** (Lv. ${level}).`,
+        ephemeral: false
+      });
+    }
+
+    if (command === "rimuovi_fortezza") {
+      if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
+
+      const user = interaction.options.getUser("giocatore");
+      const name = interaction.options.getString("nome");
+
+      const pg = await getCharacter(user.id, name);
+      if (!pg) return interaction.reply({ content: "PG non trovato!", ephemeral: true });
+
+      await deleteFortress(pg.id);
+
+      return interaction.reply({
+        content: `🏚️ Fortezza rimossa da **${pg.name}**.`,
+        ephemeral: false
+      });
+    }
+
     if (command === "elimina_pg") {
       if (!isGM) return interaction.reply({ content: "Solo il ruolo Gm-bot può usare questo comando.", ephemeral: true });
 
@@ -1031,7 +1245,7 @@ client.on("interactionCreate", async interaction => {
       await resetAllCharacters();
 
       return interaction.reply({
-        content: "💥 Reset completato. Tutte le schede, inventari, sintonie e farm giornalieri sono stati eliminati.",
+        content: "💥 Reset completato. Tutte le schede, inventari, materiali, fortezze, sintonie e farm settimanali sono stati eliminati.",
         ephemeral: false
       });
     }
@@ -1055,12 +1269,21 @@ client.on("interactionCreate", async interaction => {
       const user = interaction.options.getUser("giocatore");
       const chars = await listCharacters(user.id);
 
-      const list = chars.map(p =>
-        `${p.name} — Lv. ${p.level}, Comp. +${getProficiencyBonus(p.level)}, Deposito: ${p.bank}`
-      );
+      const lines = [];
+
+      for (const p of chars) {
+        const fortress = await getFortress(p.id);
+        const weeklyFarmCount = await getWeeklyFarmCount(p.id);
+        const proficiencyBonus = getProficiencyBonus(p.level);
+        const fortressText = fortress ? ` | Fortezza: ${fortress.name} Lv. ${fortress.level}` : "";
+
+        lines.push(
+          `${p.name} — Lv. ${p.level}, Comp. +${proficiencyBonus}, Farm: ${weeklyFarmCount}/${proficiencyBonus}, Deposito: ${p.bank}${fortressText}`
+        );
+      }
 
       return interaction.reply({
-        content: `PG di ${user.username}:\n${list.length ? list.join("\n") : "Nessuno"}`,
+        content: `PG di ${user.username}:\n${lines.length ? lines.join("\n") : "Nessuno"}`,
         ephemeral: false
       });
     }
