@@ -2,75 +2,91 @@
   "Brumaterra": {
     "comuni": [
       {
-        "nome": "sabbia dorata",
-        "mestieri": [
-          "vetraio",
-          "vasaio"
-        ],
-        "tags": "☀️"
-      },
-      {
         "nome": "lacrime di medusa",
         "mestieri": [
-          "velenario",
-          "distillatore"
+          "chef"
         ],
-        "tags": "💧💀"
+        "tags": "🎭🌑"
       },
       {
         "nome": "linfa di treant",
         "mestieri": [
-          "velenario",
-          "distillatore"
+          "chef"
         ],
-        "tags": "🏃"
+        "tags": "💪🌿"
+      },
+      {
+        "nome": "pigmento vivace",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "🎭✨"
+      },
+      {
+        "nome": "sabbia dorata",
+        "mestieri": [
+          "vasaio",
+          "vetraio"
+        ],
+        "tags": "🎭🌿"
+      },
+      {
+        "nome": "sale amaro",
+        "mestieri": [
+          "chef"
+        ],
+        "tags": "☠️🏃"
       },
       {
         "nome": "scaglia di tartaruga",
         "mestieri": [
           "fabbro",
-          "conciatore"
+          "intagliatore",
+          "pellettiere"
         ],
-        "tags": "🦴"
+        "tags": "🔥🎭"
       }
     ],
     "non_comuni": [
-      {
-        "nome": "sabbia rapida iridescente",
-        "mestieri": [
-          "vetraio",
-          "gioielliere"
-        ],
-        "tags": "☀️🏃"
-      },
-      {
-        "nome": "scheggia eolica",
-        "mestieri": [
-          "tessitore",
-          "fabbro"
-        ],
-        "tags": "🏃🎵"
-      },
-      {
-        "nome": "sale di tempesta",
-        "mestieri": [
-          "inventore"
-        ],
-        "tags": "⚡💀"
-      },
-      {
-        "nome": "alga risonante",
-        "mestieri": [
-          "erborista"
-        ],
-        "tags": "🎵☀️"
-      },
       {
         "nome": "sabbia nera oceanica",
         "mestieri": [
           "alchimista"
         ],
-        "tags": "💀🌿"
+        "tags": "🌀🏃"
+      },
+      {
+        "nome": "sabbia rapida iridescente",
+        "mestieri": [
+          "gioielliere",
+          "sarto",
+          "vasaio",
+          "vetraio"
+        ],
+        "tags": "🎭✨"
+      },
+      {
+        "nome": "sale di tempesta",
+        "mestieri": [
+          "alchimista",
+          "inventore"
+        ],
+        "tags": "⚙️🔥"
+      },
+      {
+        "nome": "scheggia eolica",
+        "mestieri": [
+          "fabbro",
+          "sarto"
+        ],
+        "tags": "⚙️🏃"
+      },
+      {
+        "nome": "vernice iridescente",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "✨🧠"
       }
     ]
   },
@@ -81,83 +97,91 @@
         "mestieri": [
           "alchimista"
         ],
-        "tags": "❄️"
+        "tags": "🔥🏃"
       }
     ],
     "non_comuni": [
       {
+        "nome": "cuoio di corteccia alpina",
+        "mestieri": [
+          "pellettiere"
+        ],
+        "tags": "💪🌿"
+      },
+      {
         "nome": "minerale tonante",
         "mestieri": [
-          "vasaio",
-          "intagliatore"
+          "intagliatore",
+          "inventore",
+          "vasaio"
         ],
-        "tags": "🏃⚡"
+        "tags": "⚙️🏃"
       },
       {
         "nome": "resina solare alpina",
         "mestieri": [
           "fabbro"
         ],
-        "tags": "☀️"
+        "tags": "✨🌿"
       },
       {
         "nome": "scheggia di ghiaccio nero",
         "mestieri": [
+          "gioielliere",
           "inventore",
-          "gioielliere"
+          "vetraio"
         ],
-        "tags": "❄️💀"
+        "tags": "🔥🌑"
       },
       {
         "nome": "zolfo cristallizzato",
         "mestieri": [
-          "erborista"
+          "farmacista"
         ],
-        "tags": "🟢🌿"
-      },
-      {
-        "nome": "cuoio di corteccia alpina",
-        "mestieri": [
-          "conciatore",
-          "calzolaio"
-        ],
-        "tags": "🦴"
+        "tags": "☠️🔥"
       }
     ]
   },
   "Cresta di Rhumbar": {
     "comuni": [
       {
-        "nome": "olio di pino ardente",
-        "mestieri": [
-          "erborista",
-          "calzolaio"
-        ],
-        "tags": "🔥"
-      },
-      {
-        "nome": "erba sibilante",
-        "mestieri": [
-          "erborista",
-          "distillatore"
-        ],
-        "tags": "🎵"
-      },
-      {
         "nome": "cristalli di sale rosa",
         "mestieri": [
           "gioielliere"
         ],
-        "tags": "❄️☀️"
+        "tags": "🔥🌿"
+      },
+      {
+        "nome": "erba sibilante",
+        "mestieri": [
+          "chef",
+          "farmacista"
+        ],
+        "tags": "🔥🧠☠️🌑"
+      },
+      {
+        "nome": "fermento caldo",
+        "mestieri": [
+          "chef"
+        ],
+        "tags": "🔥✨"
+      },
+      {
+        "nome": "olio di pino ardente",
+        "mestieri": [
+          "farmacista",
+          "pellettiere"
+        ],
+        "tags": "🔥🌿"
       }
     ],
     "non_comuni": [
       {
         "nome": "zolfo cristallizzato",
         "mestieri": [
-          "velenario"
+          "farmacista"
         ],
-        "tags": "🟢🌿"
+        "tags": "☠️🔥"
       }
     ]
   },
@@ -166,34 +190,38 @@
       {
         "nome": "conchiglia frammentata",
         "mestieri": [
-          "alchimista"
+          "alchimista",
+          "intagliatore",
+          "vasaio"
         ],
-        "tags": "🎵💧"
+        "tags": "🧠🏃"
       }
     ],
     "non_comuni": [
       {
         "nome": "cristallo di corallo azzurro",
         "mestieri": [
+          "gioielliere",
           "vasaio",
-          "gioielliere"
+          "vetraio"
         ],
-        "tags": "💧"
+        "tags": "🎭✨🧠"
       },
       {
         "nome": "filo di alga sonora",
         "mestieri": [
-          "vasaio",
-          "tessitore"
+          "sarto",
+          "vasaio"
         ],
-        "tags": "❄️🧠"
+        "tags": "🔥🏃"
       },
       {
         "nome": "sabbia nera oceanica",
         "mestieri": [
+          "alchimista",
           "fabbro"
         ],
-        "tags": "💀🌿"
+        "tags": "🌀🏃☠️"
       }
     ]
   },
@@ -203,10 +231,11 @@
       {
         "nome": "roccia runica crepata",
         "mestieri": [
-          "vetraio",
-          "inventore"
+          "inventore",
+          "vasaio",
+          "vetraio"
         ],
-        "tags": "🧠💀"
+        "tags": "🌀⛓️"
       }
     ]
   },
@@ -215,58 +244,59 @@
       {
         "nome": "foglie d'assenzio",
         "mestieri": [
-          "velenario",
-          "distillatore"
+          "chef",
+          "sarto"
         ],
-        "tags": "🟢"
+        "tags": "☠️✨"
       },
       {
         "nome": "muschio verde smeraldo",
         "mestieri": [
-          "tessitore",
-          "calzolaio"
+          "pellettiere",
+          "sarto"
         ],
-        "tags": "🌿"
+        "tags": "🧠🌿"
       },
       {
         "nome": "pietrisco runico",
         "mestieri": [
           "fabbro",
+          "intagliatore",
           "inventore"
         ],
-        "tags": "🧠"
+        "tags": "✨🧠"
       },
       {
-        "nome": "dente di serpente",
+        "nome": "rami di edera",
         "mestieri": [
-          "fabbro"
+          "farmacista"
         ],
-        "tags": "🟢"
-      },
-      {
-        "nome": "rami di edera (forza)",
-        "mestieri": [
-          "erborista"
-        ],
-        "tags": "🦴"
+        "tags": "🏃🌿"
       }
     ],
     "non_comuni": [
       {
-        "nome": "fibra di corteccia tonante",
+        "nome": "brodo della veglia",
         "mestieri": [
-          "tessitore",
-          "intagliatore"
+          "chef"
         ],
-        "tags": "🔥🦴"
+        "tags": "☠️🔥"
       },
       {
         "nome": "corteccia di quercia runica",
         "mestieri": [
           "intagliatore",
-          "conciatore"
+          "pellettiere"
         ],
-        "tags": "🦴🧠"
+        "tags": "🌀🏃💪⛓️"
+      },
+      {
+        "nome": "fibra di corteccia tonante",
+        "mestieri": [
+          "intagliatore",
+          "sarto"
+        ],
+        "tags": "🔥💪"
       }
     ]
   },
@@ -275,57 +305,65 @@
       {
         "nome": "ambra grezza",
         "mestieri": [
+          "gioielliere",
           "intagliatore",
-          "gioielliere"
+          "pittore"
         ],
-        "tags": "☀️"
-      },
-      {
-        "nome": "radice lunare",
-        "mestieri": [
-          "intagliatore",
-          "erborista"
-        ],
-        "tags": "☀️🧠"
+        "tags": "🔥✨"
       },
       {
         "nome": "erba lunare",
         "mestieri": [
-          "erborista"
+          "farmacista"
         ],
-        "tags": "🌿"
+        "tags": "🎭🌿"
       },
       {
-        "nome": "estratto di belladonna",
+        "nome": "ocra ipnotica",
         "mestieri": [
-          "conciatore"
+          "pittore"
         ],
-        "tags": "🟢"
+        "tags": "🎭🧠"
+      },
+      {
+        "nome": "radice lunare",
+        "mestieri": [
+          "farmacista",
+          "intagliatore"
+        ],
+        "tags": "🎭🌑"
       },
       {
         "nome": "resina lunare",
         "mestieri": [
-          "conciatore",
-          "calzolaio"
+          "pellettiere",
+          "sarto"
         ],
-        "tags": "💧☀️"
+        "tags": "✨🧠"
       }
     ],
     "non_comuni": [
+      {
+        "nome": "inchiostro del ricordo",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "🔥🧠"
+      },
       {
         "nome": "legno spirale arcano",
         "mestieri": [
           "intagliatore"
         ],
-        "tags": "💧🧠"
+        "tags": "🌀⛓️"
       },
       {
         "nome": "muschio lunare",
         "mestieri": [
-          "erborista",
-          "distillatore"
+          "chef",
+          "farmacista"
         ],
-        "tags": "❄️🌿"
+        "tags": "🧠🌑"
       }
     ]
   },
@@ -334,43 +372,45 @@
       {
         "nome": "fumo intrappolato",
         "mestieri": [
-          "vetraio",
-          "alchimista"
+          "alchimista",
+          "sarto",
+          "vetraio"
         ],
-        "tags": "🔥🌿"
-      },
-      {
-        "nome": "polvere vulcanica",
-        "mestieri": [
-          "vasaio",
-          "fabbro"
-        ],
-        "tags": "🔥"
+        "tags": "🎭💪"
       },
       {
         "nome": "polvere di basalto",
         "mestieri": [
           "inventore"
         ],
-        "tags": "🔥"
+        "tags": "🔥💪"
+      },
+      {
+        "nome": "polvere vulcanica",
+        "mestieri": [
+          "fabbro",
+          "vasaio"
+        ],
+        "tags": "☠️🔥"
       }
     ],
     "non_comuni": [
       {
-        "nome": "cristallo vulcanico fuso",
-        "mestieri": [
-          "vetraio",
-          "alchimista"
-        ],
-        "tags": "🔥🌿"
-      },
-      {
         "nome": "argilla lavica",
         "mestieri": [
-          "vasaio",
-          "alchimista"
+          "alchimista",
+          "vasaio"
         ],
-        "tags": "🔥"
+        "tags": "🌀🔥"
+      },
+      {
+        "nome": "cristallo vulcanico fuso",
+        "mestieri": [
+          "alchimista",
+          "vasaio",
+          "vetraio"
+        ],
+        "tags": "☠️💪"
       }
     ]
   },
@@ -379,9 +419,9 @@
       {
         "nome": "ali di pipistrello",
         "mestieri": [
-          "conciatore"
+          "pellettiere"
         ],
-        "tags": "💀🌿"
+        "tags": "🎭🌑"
       }
     ],
     "non_comuni": []
@@ -391,17 +431,10 @@
       {
         "nome": "lapislazzuli",
         "mestieri": [
-          "inventore",
-          "gioielliere"
+          "gioielliere",
+          "inventore"
         ],
-        "tags": "💧"
-      },
-      {
-        "nome": "resina elettrica",
-        "mestieri": [
-          "gioielliere"
-        ],
-        "tags": "⚡"
+        "tags": "🎭🏃"
       }
     ],
     "non_comuni": [
@@ -411,42 +444,33 @@
           "fabbro",
           "intagliatore"
         ],
-        "tags": "🎵🌿"
+        "tags": "🔥🧠✨🌿"
       }
     ]
   },
   "Miniera di Drutan": {
     "comuni": [
       {
-        "nome": "cristalli di quarzo",
-        "mestieri": [
-          "vetraio",
-          "gioielliere"
-        ],
-        "tags": "☀️"
-      },
-      {
-        "nome": "polvere di cristallo frantumato",
-        "mestieri": [
-          "vetraio",
-          "inventore"
-        ],
-        "tags": "🎵"
-      },
-      {
         "nome": "carbone vegetale",
         "mestieri": [
-          "tessitore"
+          "sarto"
         ],
-        "tags": "🔥"
+        "tags": "🔥🌑"
       },
       {
-        "nome": "ferro stregato",
+        "nome": "cristalli di quarzo",
         "mestieri": [
-          "fabbro",
-          "inventore"
+          "gioielliere",
+          "vetraio"
         ],
-        "tags": "🧠💧"
+        "tags": "✨🏃"
+      },
+      {
+        "nome": "cristalli di sale arcano",
+        "mestieri": [
+          "alchimista"
+        ],
+        "tags": "✨🧠"
       },
       {
         "nome": "ferro freddo",
@@ -454,88 +478,100 @@
           "fabbro",
           "inventore"
         ],
-        "tags": "❄️"
+        "tags": "🧠🌑"
       },
       {
-        "nome": "polvere d'argento",
+        "nome": "ferro stregato",
         "mestieri": [
-          "inventore",
-          "alchimista"
+          "fabbro",
+          "inventore"
         ],
-        "tags": "🏃🧠"
-      },
-      {
-        "nome": "smeraldo delle profondità",
-        "mestieri": [
-          "inventore",
-          "gioielliere"
-        ],
-        "tags": "🌿🟢"
-      },
-      {
-        "nome": "cristalli di sale arcano",
-        "mestieri": [
-          "alchimista"
-        ],
-        "tags": "💧"
+        "tags": "💪🌿"
       },
       {
         "nome": "granito runico",
         "mestieri": [
-          "alchimista"
+          "alchimista",
+          "vasaio"
         ],
-        "tags": "🦴"
+        "tags": "💪🌿"
       },
       {
         "nome": "onice nera",
         "mestieri": [
           "gioielliere"
         ],
-        "tags": "💀"
+        "tags": "🧠🌑"
+      },
+      {
+        "nome": "polvere d'argento",
+        "mestieri": [
+          "alchimista",
+          "inventore",
+          "sarto"
+        ],
+        "tags": "🎭🌑"
       },
       {
         "nome": "polvere di ametista",
         "mestieri": [
           "gioielliere"
         ],
-        "tags": "☀️🧠"
+        "tags": "🧠💪"
+      },
+      {
+        "nome": "polvere di cristallo frantumato",
+        "mestieri": [
+          "inventore",
+          "vetraio"
+        ],
+        "tags": "☠️🌿"
+      },
+      {
+        "nome": "smeraldo delle profondità",
+        "mestieri": [
+          "gioielliere"
+        ],
+        "tags": "☠️🌑"
       }
     ],
     "non_comuni": [
       {
-        "nome": "ossidiana tonante",
+        "nome": "condensa di mana sotterranea",
         "mestieri": [
-          "velenario"
+          "alchimista",
+          "chef"
         ],
-        "tags": "🎵💀"
+        "tags": "🌀🧠💪"
       },
       {
         "nome": "cristallo aurico",
         "mestieri": [
           "intagliatore"
         ],
-        "tags": "☀️🌿"
+        "tags": "🔥🧠"
       },
       {
         "nome": "fungo radioattivo",
         "mestieri": [
-          "erborista"
+          "farmacista"
         ],
-        "tags": "⚡"
+        "tags": "🌀🔥"
       },
       {
-        "nome": "condensa di mana sotterranea",
+        "nome": "minerale di argento necrotico",
         "mestieri": [
-          "distillatore"
-        ],
-        "tags": "⚡🧠"
-      },
-      {
-        "nome": "minerale d'argento necrotico",
-        "mestieri": [
+          "fabbro",
           "gioielliere"
         ],
-        "tags": "💀🧠"
+        "tags": "☠️⛓️"
+      },
+      {
+        "nome": "ossidiana tonante",
+        "mestieri": [
+          "alchimista"
+        ],
+        "tags": "⚙️🌑"
       }
     ]
   },
@@ -544,62 +580,63 @@
       {
         "nome": "polvere d'ossidiana",
         "mestieri": [
-          "vetraio",
-          "fabbro"
+          "vasaio",
+          "vetraio"
         ],
-        "tags": "🌿"
+        "tags": "☠️🌑"
       }
     ],
     "non_comuni": [
       {
-        "nome": "minerale d'argento necrotico",
-        "mestieri": [
-          "vetraio"
-        ],
-        "tags": "💀🧠"
-      },
-      {
-        "nome": "fungo radioattivo",
-        "mestieri": [
-          "velenario"
-        ],
-        "tags": "⚡🌿"
-      },
-      {
-        "nome": "minerale di ferro sognante",
-        "mestieri": [
-          "fabbro"
-        ],
-        "tags": "❄️"
-      },
-      {
         "nome": "condensa di mana sotterranea",
         "mestieri": [
+          "alchimista",
           "inventore"
         ],
-        "tags": "⚡🧠"
-      },
-      {
-        "nome": "ossidiana tonante",
-        "mestieri": [
-          "alchimista"
-        ],
-        "tags": "🎵💀"
+        "tags": "🌀🧠💪"
       },
       {
         "nome": "cristallo aurico",
         "mestieri": [
           "gioielliere"
         ],
-        "tags": "☀️🌿"
+        "tags": "⚙️🧠"
       },
       {
         "nome": "fibra di fungo risonante",
         "mestieri": [
-          "conciatore",
-          "calzolaio"
+          "pellettiere"
         ],
-        "tags": "🎵❄️"
+        "tags": "🔥🧠"
+      },
+      {
+        "nome": "fungo radioattivo",
+        "mestieri": [
+          "farmacista"
+        ],
+        "tags": "🌀🔥"
+      },
+      {
+        "nome": "minerale di argento necrotico",
+        "mestieri": [
+          "vetraio"
+        ],
+        "tags": "☠️⛓️"
+      },
+      {
+        "nome": "minerale di ferro sognante",
+        "mestieri": [
+          "fabbro"
+        ],
+        "tags": "🧠💪"
+      },
+      {
+        "nome": "ossidiana tonante",
+        "mestieri": [
+          "alchimista",
+          "fabbro"
+        ],
+        "tags": "⚙️🌑"
       }
     ]
   },
@@ -608,35 +645,42 @@
       {
         "nome": "giada antica",
         "mestieri": [
-          "fabbro",
           "gioielliere"
         ],
-        "tags": "🌿"
+        "tags": "☠️💪"
       },
       {
         "nome": "petali di loto",
         "mestieri": [
-          "distillatore"
+          "chef"
         ],
-        "tags": "☀️"
+        "tags": "🎭🌿"
       }
     ],
     "non_comuni": [
       {
-        "nome": "perla lunare",
-        "mestieri": [
-          "tessitore",
-          "conciatore"
-        ],
-        "tags": "☀️🌿"
-      },
-      {
         "nome": "essenza di brina lunare",
         "mestieri": [
-          "distillatore",
+          "chef",
           "gioielliere"
         ],
-        "tags": "❄️"
+        "tags": "🔥🏃"
+      },
+      {
+        "nome": "perla lunare",
+        "mestieri": [
+          "gioielliere",
+          "pellettiere",
+          "sarto"
+        ],
+        "tags": "✨🌿"
+      },
+      {
+        "nome": "sigillo di pelle tinta",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "🌑⛓️"
       }
     ]
   },
@@ -647,37 +691,51 @@
         "mestieri": [
           "alchimista"
         ],
-        "tags": "🟢"
+        "tags": "☠️🌑"
+      },
+      {
+        "nome": "pigmento caustico",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "☠️🔥"
       }
     ],
     "non_comuni": [
       {
         "nome": "alghe marcescenti",
         "mestieri": [
-          "velenario",
-          "distillatore"
+          "chef",
+          "farmacista"
         ],
-        "tags": "💧💀"
+        "tags": "🏃🌑"
       },
       {
         "nome": "cuoio di posidonia corrosiva",
         "mestieri": [
-          "conciatore",
-          "calzolaio"
+          "pellettiere"
         ],
-        "tags": "🌿🏃"
+        "tags": "☠️🔥"
       }
     ]
   },
   "Picco del Solealto": {
     "comuni": [
       {
+        "nome": "cenere sacra",
+        "mestieri": [
+          "alchimista",
+          "fabbro"
+        ],
+        "tags": "☠️🌿"
+      },
+      {
         "nome": "fulgorite",
         "mestieri": [
-          "vetraio",
-          "vasaio"
+          "vasaio",
+          "vetraio"
         ],
-        "tags": "⚡"
+        "tags": "🔥💪"
       },
       {
         "nome": "rame tempestoso",
@@ -685,47 +743,56 @@
           "fabbro",
           "inventore"
         ],
-        "tags": "⚡"
-      },
-      {
-        "nome": "cenere sacra",
-        "mestieri": [
-          "fabbro",
-          "alchimista"
-        ],
-        "tags": "☀️"
+        "tags": "✨🏃"
       },
       {
         "nome": "resina elettrica",
         "mestieri": [
-          "calzolaio"
+          "pellettiere"
         ],
-        "tags": "⚡"
+        "tags": "🏃🌿"
       }
     ],
     "non_comuni": [
       {
         "nome": "cristallo di tuono",
         "mestieri": [
+          "fabbro",
+          "gioielliere",
           "intagliatore",
-          "gioielliere"
+          "inventore",
+          "vetraio"
         ],
-        "tags": "⚡☀️"
+        "tags": "🌑🌿"
+      },
+      {
+        "nome": "linfa del corpo dipinto",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "💪🌿"
+      },
+      {
+        "nome": "oro di solealto in polvere",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "✨🏃"
       },
       {
         "nome": "resina di albero solare",
         "mestieri": [
-          "erborista",
-          "distillatore"
+          "chef",
+          "farmacista"
         ],
-        "tags": "☀️"
+        "tags": "⚙️🌿"
       },
       {
         "nome": "resina solare alpina",
         "mestieri": [
-          "distillatore"
+          "chef"
         ],
-        "tags": "☀️"
+        "tags": "✨🌿"
       }
     ]
   },
@@ -734,130 +801,175 @@
       {
         "nome": "cristalli di sale arcano",
         "mestieri": [
+          "vasaio",
           "vetraio"
         ],
-        "tags": "💧"
+        "tags": "✨🧠"
       },
       {
         "nome": "scaglie di pesce degli abissi",
         "mestieri": [
-          "vetraio",
-          "vasaio"
+          "vasaio",
+          "vetraio"
         ],
-        "tags": "❄️💧"
+        "tags": "🏃🌑"
       }
     ],
     "non_comuni": [
-      {
-        "nome": "sale di tempesta",
-        "mestieri": [
-          "velenario"
-        ],
-        "tags": "⚡💀"
-      },
       {
         "nome": "alga risonante",
         "mestieri": [
           "vasaio"
         ],
-        "tags": "🎵"
+        "tags": "✨🌿"
       },
       {
         "nome": "cristallo di mare profondo",
         "mestieri": [
           "inventore"
         ],
-        "tags": "❄️🧠"
+        "tags": "🎭✨"
+      },
+      {
+        "nome": "sale di tempesta",
+        "mestieri": [
+          "alchimista"
+        ],
+        "tags": "⚙️🔥"
       }
     ]
   },
   "Radombra": {
     "comuni": [
       {
-        "nome": "sangue essiccato",
+        "nome": "nero di candela",
         "mestieri": [
-          "velenario",
-          "alchimista"
+          "pittore"
         ],
-        "tags": "💀"
-      },
-      {
-        "nome": "tela di ragno gigante",
-        "mestieri": [
-          "tessitore",
-          "alchimista"
-        ],
-        "tags": "🏃"
+        "tags": "🧠🌑"
       },
       {
         "nome": "ossa di meta-lupo",
         "mestieri": [
           "fabbro",
-          "intagliatore"
+          "intagliatore",
+          "pittore"
         ],
-        "tags": "💀"
+        "tags": "🌑💪"
       },
       {
         "nome": "radice contorta",
         "mestieri": [
-          "intagliatore"
+          "intagliatore",
+          "pittore"
         ],
-        "tags": "🧠💀"
+        "tags": "☠️🌿"
       },
       {
         "nome": "rami di edera",
         "mestieri": [
           "intagliatore"
         ],
-        "tags": "🦴"
+        "tags": "🏃🌿"
+      },
+      {
+        "nome": "sangue essiccato",
+        "mestieri": [
+          "farmacista"
+        ],
+        "tags": "☠️✨"
+      },
+      {
+        "nome": "tela di ragno gigante",
+        "mestieri": [
+          "pittore",
+          "sarto"
+        ],
+        "tags": "🏃🌿"
       }
     ],
     "non_comuni": [
       {
-        "nome": "lichene arcano",
+        "nome": "colore rubato",
         "mestieri": [
-          "vetraio",
-          "inventore"
+          "pittore"
         ],
-        "tags": "💧🎵"
-      },
-      {
-        "nome": "fungo cristallino",
-        "mestieri": [
-          "velenario",
-          "erborista"
-        ],
-        "tags": "🧠"
+        "tags": "🎭⛓️"
       },
       {
         "nome": "fiore del crepuscolo",
         "mestieri": [
-          "tessitore"
+          "sarto"
         ],
-        "tags": "💀🧠"
+        "tags": "🧠🌑"
       },
       {
-        "nome": "radice di ombra",
+        "nome": "fungo cristallino",
         "mestieri": [
-          "tessitore",
-          "alchimista"
+          "farmacista"
         ],
-        "tags": "💀🌿"
-      },
-      {
-        "nome": "radice cantante",
-        "mestieri": [
-          "intagliatore",
-          "erborista"
-        ],
-        "tags": "🎵💧"
+        "tags": "🎭🧠"
       },
       {
         "nome": "legno spirale arcano",
         "mestieri": [
-          "conciatore"
+          "pellettiere"
         ],
-        "tags": "💧🧠"
+        "tags": "🌀🏃"
+      },
+      {
+        "nome": "lichene arcano",
+        "mestieri": [
+          "alchimista",
+          "inventore",
+          "sarto",
+          "vetraio"
+        ],
+        "tags": "⚙️🔥🌀🧠"
+      },
+      {
+        "nome": "pelle di predatore notturno",
+        "mestieri": [
+          "pellettiere"
+        ],
+        "tags": "✨🌑"
+      },
+      {
+        "nome": "pigmento spettrale",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "🌀🌑"
+      },
+      {
+        "nome": "radice cantante",
+        "mestieri": [
+          "farmacista",
+          "intagliatore"
+        ],
+        "tags": "✨🌿💪⛓️"
+      },
+      {
+        "nome": "radice di ombra",
+        "mestieri": [
+          "alchimista",
+          "sarto"
+        ],
+        "tags": "🌑⛓️"
+      },
+      {
+        "nome": "seta d'ombra silente",
+        "mestieri": [
+          "pellettiere"
+        ],
+        "tags": "🏃🌑"
+      },
+      {
+        "nome": "tela semiviva",
+        "mestieri": [
+          "pittore"
+        ],
+        "tags": "🌀🌿"
       }
     ]
   },
@@ -866,41 +978,42 @@
       {
         "nome": "dente di serpente",
         "mestieri": [
-          "velenario"
+          "farmacista"
         ],
-        "tags": "🟢"
-      },
-      {
-        "nome": "spina di riccio",
-        "mestieri": [
-          "tessitore",
-          "calzolaio"
-        ],
-        "tags": "🦴"
-      },
-      {
-        "nome": "miele di ramaluce (velocità)",
-        "mestieri": [
-          "erborista"
-        ],
-        "tags": "🏃"
+        "tags": "☠️✨"
       },
       {
         "nome": "miele di ramaluce",
         "mestieri": [
-          "calzolaio"
+          "farmacista",
+          "pellettiere"
         ],
-        "tags": "🏃"
+        "tags": "🏃💪"
+      },
+      {
+        "nome": "spezia tonificante",
+        "mestieri": [
+          "chef"
+        ],
+        "tags": "🏃💪"
+      },
+      {
+        "nome": "spina di riccio",
+        "mestieri": [
+          "pellettiere",
+          "sarto"
+        ],
+        "tags": "☠️💪"
       }
     ],
     "non_comuni": [
       {
         "nome": "erba fosforescente",
         "mestieri": [
-          "erborista",
-          "distillatore"
+          "chef",
+          "farmacista"
         ],
-        "tags": "☀️🟢"
+        "tags": "🎭✨"
       }
     ]
   }
