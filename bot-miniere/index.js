@@ -1,10 +1,19 @@
-import { Client, GatewayIntentBits, EmbedBuilder, ActivityType } from 'discord.js';
-import fs from 'fs';
-import path from 'path';
-import dotenv from 'dotenv';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
-import { fileURLToPath } from 'url';
+import {
+  Client,
+  GatewayIntentBits,
+  EmbedBuilder,
+  ActivityType,
+  REST,
+  Routes,
+  SlashCommandBuilder
+} from "discord.js";
+
+import fs from "fs";
+import path from "path";
+import dotenv from "dotenv";
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
@@ -12,24 +21,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const TOKEN = process.env.MINIERE_TOKEN?.trim();
+const CLIENT_ID = process.env.MINIERE_CLIENT_ID?.trim() || process.env.CLIENT_ID?.trim();
+const GUILD_ID = process.env.GUILD_ID?.trim();
 
-if (!TOKEN) {
-  console.error("Manca MINIERE_TOKEN nelle variabili Railway.");
+const DB_PATH = process.env.WESTMARCH_DB_PATH || process.env.DB_PATH || "/data/westmarch.db";
+const NOME_BOT = "Grumni Picconaccia";
+const BETA_ROLE_NAME = "Beta";
+
+if (!TOKEN || !CLIENT_ID || !GUILD_ID) {
+  console.error("Mancano variabili Railway. Servono MINIERE_TOKEN, MINIERE_CLIENT_ID e GUILD_ID.");
   process.exit(1);
 }
 
-const PREFIX = '!';
-const DB_PATH = process.env.WESTMARCH_DB_PATH || process.env.DB_PATH || '/data/westmarch.db';
-const NOME_BOT = 'Grumni Picconaccia';
-
-const dataDir = path.join(__dirname, 'data');
+const dataDir = path.join(__dirname, "data");
 if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-const MINIERE_FILE = fs.existsSync(path.join(__dirname, 'data', 'miniere.json'))
-  ? path.join(__dirname, 'data', 'miniere.json')
-  : path.join(__dirname, 'miniere.json');
-
-const FORTEZZE_FILE = path.join(__dirname, 'data', 'fortezze.json');
+const MINIERE_FILE = fs.existsSync(path.join(__dirname, "data", "miniere.json"))
+  ? path.join(__dirname, "data", "miniere.json")
+  : path.join(__dirname, "miniere.json");
 
 let db;
 
@@ -78,6 +87,31 @@ async function initDB() {
       UNIQUE(characterId, date),
       FOREIGN KEY (characterId) REFERENCES characters(id)
     );
+
+    CREATE TABLE IF NOT EXISTS weekly_farms (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      characterId INTEGER NOT NULL,
+      weekStart TEXT NOT NULL,
+      count INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(characterId, weekStart),
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS materials_inventory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      characterId INTEGER NOT NULL,
+      material TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(characterId, material),
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS fortresses (
+      characterId INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      level INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+    );
   `);
 
   console.log(`SQLite Miniere collegato a: ${DB_PATH}`);
@@ -86,88 +120,81 @@ async function initDB() {
 await initDB();
 
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
+  intents: [GatewayIntentBits.Guilds]
 });
 
-const DOMANDE_PERSONAGGIO = [
-  'Oi, {name}! Hai {n} personaggi. Quale di questi disgraziati mandi a morire nelle mie miniere? Scrivi il numero.',
-  '{name}, scegli il tuo burattino. Chi sacrifichiamo oggi? Scrivi il numero, idiota.',
-  'Senti {name}, quale dei tuoi alter ego pezzenti vuoi usare? Scegli il numero e sbrigati.',
-  'Oh {name}, hai {n} personaggi e nessuno di loro vale un cazzo. Ma vabbè, scegline uno. Numero.',
-  '{name}! {n} personaggi disponibili. Scegli quale mandare al macello. Numero. Ora.',
-  'Eccoci, {name}. {n} disgraziati tra cui scegliere. Quale onora le mie miniere della sua inutile presenza? Numero.',
-];
+const rest = new REST({ version: "10" }).setToken(TOKEN);
+
+// === FRASI SASSY ===
 
 const FRASI_ZERO = [
-  '💨 **{pg}** ha scavato nella **{miniera}** col carisma di un cucchiaio di legno. Risultato? NIENTE. Come la tua vita sentimentale, sociale e professionale.',
-  '🦗 Ah **{pg}**, sei tornato dalla **{miniera}** a mani vuote. Di nuovo. A questo punto è una tradizione di famiglia, no?',
-  '😂 La **{miniera}** ha visto arrivare **{pg}** e ha nascosto tutto. TUTTO. Neanche i sassi ti vogliono. Pensa un po\'.',
-  '🪨 **{pg}** ha picconato per ore nella **{miniera}**. Ha trovato? La consapevolezza che anche come minatore fai cagare. Gratis, nemmeno quella meritavi.',
-  '💀 **{pg}**, sei andato nella **{miniera}** e sei tornato con niente. Mia nonna morta scaverebbe meglio. Con un cucchiaino. Bendata. Sottacqua.',
-  '🤡 Complimenti **{pg}**! Hai trasformato la **{miniera}** in una passeggiata della vergogna. Zero materiali, zero dignità, zero speranza. Il trittico perfetto.',
-  '🫠 Il dado ha guardato **{pg}** negli occhi, ha riso forte, e gli ha dato un calcio nel culo. ZERO dalla **{miniera}**. Meritatissimo.',
-  '🐛 **{pg}** dalla **{miniera}** porta a casa: delusione, imbarazzo e l\'odore di chi ha fallito. Di nuovo. Come sempre.',
-  '💩 Ma che piccone usa **{pg}**? Uno fatto di formaggio? La **{miniera}** gli ha dato ZERO e onestamente ha fatto bene.',
-  '🪦 R.I.P. la dignità di **{pg}**, morta nella **{miniera}** alle ore {ora}. Non mancherà a nessuno.',
-  '🗑️ **{pg}** è l\'unico essere vivente che riesce a entrare in una miniera piena di roba e uscire con NIENTE. Darwin aveva ragione.',
-  '🤮 **{pg}** nella **{miniera}**: zero materiali. Se la mediocrità fosse un minerale, saresti ricchissimo.',
-  '☠️ Sai cosa hanno in comune **{pg}** e la **{miniera}**? Niente. **{pg}** non ha niente. La miniera ce l\'ha ma non glielo dà. Bellissimo.',
+  "💨 **{pg}** ha scavato nella **{miniera}** col carisma di un cucchiaio di legno. Risultato? NIENTE. Come la tua vita sentimentale, sociale e professionale.",
+  "🦗 Ah **{pg}**, sei tornato dalla **{miniera}** a mani vuote. Di nuovo. A questo punto è una tradizione di famiglia, no?",
+  "😂 La **{miniera}** ha visto arrivare **{pg}** e ha nascosto tutto. TUTTO. Neanche i sassi ti vogliono. Pensa un po'.",
+  "🪨 **{pg}** ha picconato per ore nella **{miniera}**. Ha trovato? La consapevolezza che anche come minatore fai cagare. Gratis, nemmeno quella meritavi.",
+  "💀 **{pg}**, sei andato nella **{miniera}** e sei tornato con niente. Mia nonna morta scaverebbe meglio. Con un cucchiaino. Bendata. Sott'acqua.",
+  "🤡 Complimenti **{pg}**! Hai trasformato la **{miniera}** in una passeggiata della vergogna. Zero materiali, zero dignità, zero speranza. Il trittico perfetto.",
+  "🫠 Il dado ha guardato **{pg}** negli occhi, ha riso forte, e gli ha dato un calcio nel culo. ZERO dalla **{miniera}**. Meritatissimo.",
+  "🐛 **{pg}** dalla **{miniera}** porta a casa: delusione, imbarazzo e l'odore di chi ha fallito. Di nuovo. Come sempre.",
+  "💩 Ma che piccone usa **{pg}**? Uno fatto di formaggio? La **{miniera}** gli ha dato ZERO e onestamente ha fatto bene.",
+  "🪦 R.I.P. la dignità di **{pg}**, morta nella **{miniera}** alle ore {ora}. Non mancherà a nessuno.",
+  "🗑️ **{pg}** è l'unico essere vivente che riesce a entrare in una miniera piena di roba e uscire con NIENTE. Darwin aveva ragione.",
+  "🤮 **{pg}** nella **{miniera}**: zero materiali. Se la mediocrità fosse un minerale, saresti ricchissimo.",
+  "☠️ Sai cosa hanno in comune **{pg}** e la **{miniera}**? Niente. **{pg}** non ha niente. La miniera ce l'ha ma non glielo dà. Bellissimo."
 ];
 
 const FRASI_TROVATO_1 = [
-  '⛏️ Oh. Oh. **{pg}** ha trovato **{q}x {mat}** nella **{miniera}**. Non eccitarti troppo, è UNO. Uno solo. Come i tuoi neuroni funzionanti.',
-  '🎉 **{pg}** trova **{q}x {mat}** nella **{miniera}**! Wow, un intero materiale. Applauso? Col cazzo. Torna quando ne trovi due, sfigato.',
-  '💎 **{q}x {mat}** dalla **{miniera}** per **{pg}**. Sì ok, bravo. Mio cugino ne trova 10 al giorno e ha un braccio solo, ma non tutti possono.',
-  '🔨 *toc toc*... **{q}x {mat}**! **{pg}**, la **{miniera}** ti ha fatto la carità. Come la mensa dei poveri. Ringrazia e sparisci.',
-  '✨ **{pg}** estrae **{q}x {mat}** dalla **{miniera}**. Uno. Singolo. Solitario. Come te il sabato sera.',
-  '🪙 **{q}x {mat}** dalla **{miniera}**. **{pg}**, tecnicamente è un successo. Come tecnicamente anche un orologio rotto segna l\'ora giusta due volte al giorno.',
-  '⛏️ **{pg}**, **{q}x {mat}** dalla **{miniera}**. Oh wow. La mia ascia è più impressionata di me, e la mia ascia non ha sentimenti.',
-  '🥉 **{q}x {mat}**! **{pg}**, hai il talento minerario di una patata. Ma almeno la patata è utile in cucina.',
-  '🐌 **{pg}** ha trovato **{q}x {mat}** nella **{miniera}**! Con la velocità e l\'efficienza di una lumaca morta. Ma ehi, conta il risultato... forse.',
-  '🧻 **{q}x {mat}** dalla **{miniera}** per **{pg}**. Mettilo in tasca, è probabilmente la cosa più preziosa che possiedi.',
+  "⛏️ Oh. Oh. **{pg}** ha trovato **{q}x {mat}** nella **{miniera}**. Non eccitarti troppo, è UNO. Uno solo. Come i tuoi neuroni funzionanti.",
+  "🎉 **{pg}** trova **{q}x {mat}** nella **{miniera}**! Wow, un intero materiale. Applauso? Col cazzo. Torna quando ne trovi due, sfigato.",
+  "💎 **{q}x {mat}** dalla **{miniera}** per **{pg}**. Sì ok, bravo. Mio cugino ne trova 10 al giorno e ha un braccio solo, ma non tutti possono.",
+  "🔨 *toc toc*... **{q}x {mat}**! **{pg}**, la **{miniera}** ti ha fatto la carità. Come la mensa dei poveri. Ringrazia e sparisci.",
+  "✨ **{pg}** estrae **{q}x {mat}** dalla **{miniera}**. Uno. Singolo. Solitario. Come te il sabato sera.",
+  "🪙 **{q}x {mat}** dalla **{miniera}**. **{pg}**, tecnicamente è un successo. Come tecnicamente anche un orologio rotto segna l'ora giusta due volte al giorno.",
+  "⛏️ **{pg}**, **{q}x {mat}** dalla **{miniera}**. Oh wow. La mia ascia è più impressionata di me, e la mia ascia non ha sentimenti.",
+  "🥉 **{q}x {mat}**! **{pg}**, hai il talento minerario di una patata. Ma almeno la patata è utile in cucina.",
+  "🐌 **{pg}** ha trovato **{q}x {mat}** nella **{miniera}**! Con la velocità e l'efficienza di una lumaca morta. Ma ehi, conta il risultato... forse.",
+  "🧻 **{q}x {mat}** dalla **{miniera}** per **{pg}**. Mettilo in tasca, è probabilmente la cosa più preziosa che possiedi."
 ];
 
 const FRASI_TROVATO_2 = [
-  '🔥🔥 ...Ma che cazzo?! **{pg}** tira fuori **{q}x {mat}** dalla **{miniera}**?! Ok ammetto che sono quasi — QUASI — impressionato. Non ti montare la testa.',
-  '💎💎 **{q}x {mat}**?! Dalla **{miniera}**?! **{pg}**, o hai barato, il dado è truccato, o l\'universo ha avuto un ictus.',
-  '⛏️⛏️ DUE?! **{q}x {mat}** dalla **{miniera}**?! **{pg}**, mi stai facendo riconsiderare tutto quello che ho detto su di te. Scherzo, fai ancora schifo. Ma meno.',
-  '🌟🌟 Per la barba di mio nonno! **{pg}** trova **{q}x {mat}** dalla **{miniera}**! Il dado ti ama più di quanto chiunque ti abbia mai amato nella vita reale.',
-  '🎰🎰 **{q}x {mat}**! **{pg}**, hai venduto l\'anima a qualche demone? Perché con quel faccino non è possibile avere \'sta fortuna naturalmente.',
-  '💥💥 DOPPIETTA **{q}x {mat}** dalla **{miniera}**! **{pg}**, goditi questo momento. Fotografalo. Stampalo. Perché non ricapiterà MAI PIÙ.',
-  '👑👑 **{q}x {mat}**! **{pg}** dalla **{miniera}** come un re! ...Un re di un regno di merda, governato da incompetenti, ma pur sempre un re.',
-  '🍀🍀 MA VAFFAN— ok ok. **{q}x {mat}** dalla **{miniera}** per **{pg}**. Mi rode il culo ammetterlo ma... bravo. Ora VATTENE.',
-  '😤😤 **{q}x {mat}** dalla **{miniera}**. **{pg}**, sai quanto mi fa incazzare quando uno come te trova roba? TANTO. Goditela, stronzo fortunato.',
-  '🏆🏆 Non ci credo. **{q}x {mat}** dalla **{miniera}** per **{pg}**. Devo bere. Dove cazzo è la mia birra.',
+  "🔥🔥 ...Ma che cazzo?! **{pg}** tira fuori **{q}x {mat}** dalla **{miniera}**?! Ok ammetto che sono quasi — QUASI — impressionato. Non ti montare la testa.",
+  "💎💎 **{q}x {mat}**?! Dalla **{miniera}**?! **{pg}**, o hai barato, il dado è truccato, o l'universo ha avuto un ictus.",
+  "⛏️⛏️ DUE?! **{q}x {mat}** dalla **{miniera}**?! **{pg}**, mi stai facendo riconsiderare tutto quello che ho detto su di te. Scherzo, fai ancora schifo. Ma meno.",
+  "🌟🌟 Per la barba di mio nonno! **{pg}** trova **{q}x {mat}** dalla **{miniera}**! Il dado ti ama più di quanto chiunque ti abbia mai amato nella vita reale.",
+  "🎰🎰 **{q}x {mat}**! **{pg}**, hai venduto l'anima a qualche demone? Perché con quel faccino non è possibile avere 'sta fortuna naturalmente.",
+  "💥💥 DOPPIETTA **{q}x {mat}** dalla **{miniera}**! **{pg}**, goditi questo momento. Fotografalo. Stampalo. Perché non ricapiterà MAI PIÙ.",
+  "👑👑 **{q}x {mat}**! **{pg}** dalla **{miniera}** come un re! ...Un re di un regno di merda, governato da incompetenti, ma pur sempre un re.",
+  "🍀🍀 MA VAFFAN— ok ok. **{q}x {mat}** dalla **{miniera}** per **{pg}**. Mi rode il culo ammetterlo ma... bravo. Ora VATTENE.",
+  "😤😤 **{q}x {mat}** dalla **{miniera}**. **{pg}**, sai quanto mi fa incazzare quando uno come te trova roba? TANTO. Goditela, stronzo fortunato.",
+  "🏆🏆 Non ci credo. **{q}x {mat}** dalla **{miniera}** per **{pg}**. Devo bere. Dove cazzo è la mia birra."
 ];
 
 const FRASI_NON_COMUNE_ZERO = [
-  '😬 **{pg}** ha cercato **{mat}** nella **{miniera}**... materiale NON COMUNE, genio. Serviva almeno 9 e tu hai tirato come mia zia cieca al bingo. Patetico.',
-  '🫥 **{mat}**? Nella **{miniera}**? **{pg}**, per i non comuni devi tirare ALTO. Non con queste manine da impiegato delle poste in pausa caffè.',
-  '🪨 **{pg}** cerca **{mat}** nella **{miniera}** e fallisce. Come al solito. Per i non comuni serve fortuna, e tu sei nato sotto una stella morta.',
-  '💤 La **{miniera}** tiene stretti i suoi **{mat}**. Non li dà ai dilettanti come **{pg}**. Torna con una fortezza vera.',
-  '🚫 **{pg}** voleva **{mat}** dalla **{miniera}**. La **{miniera}** voleva che **{pg}** andasse a fare in culo. Indovina chi ha vinto?',
-  '🤏 Soooo vicino a trovare **{mat}**... AHAHAHAHA no sto scherzando. **{pg}** non era neanche nella stessa galassia.',
-  '🐀 **{pg}**, cercare **{mat}** col tuo tiro è come cercare di leccarti il gomito. Puoi provarci, ma fai solo ridere gli altri.',
-  '🎪 **{pg}** cercava **{mat}** nella **{miniera}**? Che spettacolo comico. Prossima volta vendo i biglietti.',
+  "😬 **{pg}** ha cercato **{mat}** nella **{miniera}**... materiale NON COMUNE, genio. Serviva almeno 9 e tu hai tirato come mia zia cieca al bingo. Patetico.",
+  "🫥 **{mat}**? Nella **{miniera}**? **{pg}**, per i non comuni devi tirare ALTO. Non con queste manine da impiegato delle poste in pausa caffè.",
+  "🪨 **{pg}** cerca **{mat}** nella **{miniera}** e fallisce. Come al solito. Per i non comuni serve fortuna, e tu sei nato sotto una stella morta.",
+  "💤 La **{miniera}** tiene stretti i suoi **{mat}**. Non li dà ai dilettanti come **{pg}**. Torna con una fortezza vera.",
+  "🚫 **{pg}** voleva **{mat}** dalla **{miniera}**. La **{miniera}** voleva che **{pg}** andasse a fare in culo. Indovina chi ha vinto?",
+  "🤏 Soooo vicino a trovare **{mat}**... AHAHAHAHA no sto scherzando. **{pg}** non era neanche nella stessa galassia.",
+  "🐀 **{pg}**, cercare **{mat}** col tuo tiro è come cercare di leccarti il gomito. Puoi provarci, ma fai solo ridere gli altri.",
+  "🎪 **{pg}** cercava **{mat}** nella **{miniera}**? Che spettacolo comico. Prossima volta vendo i biglietti."
 ];
 
 const FRASI_NO_PG = [
-  '🚫 {name}, chi cazzo sei? Non hai personaggi nel registro. Vai dall\'altro bot e creane uno prima di rompere il cazzo a me.',
-  '🤷 {name}, zero personaggi. Sei un fantasma. Un nessuno. Vai a creare un PG e poi torna.',
-  '😤 {name}, vuoi farmare senza neanche un personaggio?! È come presentarti a una guerra senza armi e senza vestiti.',
-  '🪦 {name}, non esisti nel mio registro. Per me sei aria. Crea un PG col bot principale e poi ne riparliamo.',
-  '🤡 {name} prova a farmare senza personaggio. SENZA PERSONAGGIO. Fatti una vita prima, poi una scheda.',
+  "🚫 {name}, chi cazzo sei? Non hai personaggi nel registro. Vai dall'altro bot e creane uno prima di rompere il cazzo a me.",
+  "🤷 {name}, zero personaggi. Sei un fantasma. Un nessuno. Vai a creare un PG e poi torna.",
+  "😤 {name}, vuoi farmare senza neanche un personaggio?! È come presentarti a una guerra senza armi e senza vestiti.",
+  "🪦 {name}, non esisti nel mio registro. Per me sei aria. Crea un PG col bot principale e poi ne riparliamo.",
+  "🤡 {name} prova a farmare senza personaggio. SENZA PERSONAGGIO. Fatti una vita prima, poi una scheda."
 ];
 
 const FRASI_NO_FORTEZZA = [
-  '🏚️ {name}, il tuo **{pg}** non ha ancora una fortezza registrata! Usa `!fortezza {pg} <livello>` per impostarla. Anche 0 va bene, almeno so quanto fai schifo.',
-  '🧱 Ehi {name}, **{pg}** non ha la fortezza. Senza fortezza non si farma. `!fortezza {pg} <0-5>`. Muoviti.',
-  '🏗️ {name}, **{pg}** è senza fortezza. Come un cavaliere senza cavallo. Patetico. `!fortezza {pg} <0-5>` e poi torna.',
+  "🏚️ {name}, il tuo **{pg}** non ha ancora una fortezza registrata! Usa `/imposta_fortezza` oppure fatti aiutare da qualcuno con due neuroni e il ruolo Beta.",
+  "🧱 Ehi {name}, **{pg}** non ha la fortezza. Senza fortezza non si farma. Non sono una ONLUS del piccone.",
+  "🏗️ {name}, **{pg}** è senza fortezza. Come un cavaliere senza cavallo. Patetico. Prima la fortezza, poi il sudore."
 ];
+
+// === UTILS ===
 
 function pick(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
@@ -178,7 +205,7 @@ function randInt(min, max) {
 }
 
 function capitalize(s) {
-  if (!s) return '';
+  if (!s) return "";
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
@@ -186,18 +213,17 @@ function fmt(template, vars) {
   return template.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? `{${k}}`);
 }
 
-function now() {
-  const d = new Date();
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()} — ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+function nowRome() {
+  return new Intl.DateTimeFormat("it-IT", {
+    timeZone: "Europe/Rome",
+    dateStyle: "short",
+    timeStyle: "short"
+  }).format(new Date());
 }
 
 function hasBetaRole(member) {
   try {
-    return member?.roles?.cache?.some(r => r.name.toLowerCase() === 'beta');
+    return member?.roles?.cache?.some(r => r.name === BETA_ROLE_NAME);
   } catch {
     return false;
   }
@@ -206,7 +232,7 @@ function hasBetaRole(member) {
 function loadJSON(filepath, defaultVal = {}) {
   try {
     if (fs.existsSync(filepath)) {
-      return JSON.parse(fs.readFileSync(filepath, 'utf-8'));
+      return JSON.parse(fs.readFileSync(filepath, "utf-8"));
     }
   } catch (e) {
     console.error(`Errore lettura ${filepath}:`, e.message);
@@ -217,7 +243,7 @@ function loadJSON(filepath, defaultVal = {}) {
 }
 
 function saveJSON(filepath, data) {
-  fs.writeFileSync(filepath, JSON.stringify(data, null, 2), 'utf-8');
+  fs.writeFileSync(filepath, JSON.stringify(data, null, 2), "utf-8");
 }
 
 function getProficiencyBonus(level) {
@@ -227,6 +253,161 @@ function getProficiencyBonus(level) {
   if (level >= 5) return 3;
   return 2;
 }
+
+function getRomeDateParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Rome",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+
+  const get = type => Number(parts.find(p => p.type === type).value);
+
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day")
+  };
+}
+
+function getCurrentWeekStartKey() {
+  const { year, month, day } = getRomeDateParts();
+
+  const localDateAsUTC = new Date(Date.UTC(year, month - 1, day));
+  const dayOfWeek = localDateAsUTC.getUTCDay();
+
+  const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+
+  localDateAsUTC.setUTCDate(localDateAsUTC.getUTCDate() - daysSinceMonday);
+
+  return localDateAsUTC.toISOString().slice(0, 10);
+}
+
+function formatMaterials(rows) {
+  if (!rows.length) return "Vuoto";
+  return rows.map(r => `${r.quantity}x ${capitalize(r.material)}`).join(", ");
+}
+
+function caricaMiniere() {
+  const data = loadJSON(MINIERE_FILE);
+  const numMiniere = Object.keys(data).length;
+
+  if (numMiniere === 0) {
+    console.warn(`⚠️ miniere.json vuoto o non trovato in ${MINIERE_FILE}`);
+  }
+
+  return data;
+}
+
+function getNome(mat) {
+  return typeof mat === "object" ? mat.nome.toLowerCase() : mat.toLowerCase();
+}
+
+function getMestieri(mat) {
+  return typeof mat === "object" ? (mat.mestieri || []) : [];
+}
+
+function getTags(mat) {
+  return typeof mat === "object" ? (mat.tags || "") : "";
+}
+
+function trovaMateriale(miniere, nomeMat) {
+  const nl = nomeMat.toLowerCase();
+
+  for (const [miniera, dati] of Object.entries(miniere)) {
+    for (const mat of (dati.comuni || [])) {
+      if (getNome(mat) === nl) {
+        return {
+          miniera,
+          rarita: "comuni",
+          mestieri: getMestieri(mat),
+          tags: getTags(mat)
+        };
+      }
+    }
+
+    for (const mat of (dati.non_comuni || [])) {
+      if (getNome(mat) === nl) {
+        return {
+          miniera,
+          rarita: "non_comuni",
+          mestieri: getMestieri(mat),
+          tags: getTags(mat)
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function tuttiNomiMateriali(miniere) {
+  const nomi = new Set();
+
+  for (const dati of Object.values(miniere)) {
+    for (const mat of [...(dati.comuni || []), ...(dati.non_comuni || [])]) {
+      nomi.add(getNome(mat));
+    }
+  }
+
+  return [...nomi].sort((a, b) => a.localeCompare(b));
+}
+
+function tuttiNomiMiniere(miniere) {
+  return Object.keys(miniere).sort((a, b) => a.localeCompare(b));
+}
+
+function suggerisciMateriale(miniere, input, max = 3) {
+  const il = input.toLowerCase();
+  const nomi = tuttiNomiMateriali(miniere);
+  const sugg = [];
+
+  for (const nome of nomi) {
+    if (il.includes(nome) || nome.includes(il)) {
+      sugg.push([0, nome]);
+      continue;
+    }
+
+    let cs = 0;
+
+    for (let i = 0; i < Math.min(il.length, nome.length); i++) {
+      if (il[i] === nome[i]) cs++;
+      else break;
+    }
+
+    if (cs >= 3) {
+      sugg.push([1, nome]);
+      continue;
+    }
+
+    const pi = new Set(il.split(" "));
+    const pn = new Set(nome.split(" "));
+
+    if ([...pi].some(w => pn.has(w))) {
+      sugg.push([2, nome]);
+    }
+  }
+
+  sugg.sort((a, b) => a[0] - b[0]);
+  return sugg.slice(0, max).map(s => s[1]);
+}
+
+function calcolaRisultato(dado, fortezza, rarita) {
+  const totale = dado + fortezza;
+
+  if (rarita === "comuni") {
+    if (totale <= 3) return 0;
+    if (totale <= 8) return 1;
+    return 2;
+  }
+
+  if (totale <= 8) return 0;
+  if (totale <= 11) return 1;
+  return 2;
+}
+
+// === DB HELPERS ===
 
 async function ensurePlayer(user) {
   const existing = await db.get("SELECT id FROM players WHERE id = ?", user.id);
@@ -279,219 +460,322 @@ async function rimuoviPgDB(userId, nome) {
   await db.run("DELETE FROM inventory WHERE characterId = ?", pg.id);
   await db.run("DELETE FROM attunements WHERE characterId = ?", pg.id);
   await db.run("DELETE FROM daily_farms WHERE characterId = ?", pg.id);
+  await db.run("DELETE FROM weekly_farms WHERE characterId = ?", pg.id);
+  await db.run("DELETE FROM materials_inventory WHERE characterId = ?", pg.id);
+  await db.run("DELETE FROM fortresses WHERE characterId = ?", pg.id);
   await db.run("DELETE FROM characters WHERE id = ?", pg.id);
+
+  const remaining = await getPersonaggiUtente(userId);
+  if (remaining.length === 0) {
+    await db.run("DELETE FROM players WHERE id = ?", userId);
+  }
 
   return true;
 }
 
-async function getInventory(characterId) {
-  const rows = await db.all("SELECT item FROM inventory WHERE characterId = ?", characterId);
-  return rows.map(r => r.item);
+async function getAllCharacters() {
+  return db.all("SELECT * FROM characters ORDER BY playerId ASC, id ASC");
 }
 
-async function addInventoryItem(characterId, item) {
-  await db.run("INSERT INTO inventory (characterId, item) VALUES (?, ?)", characterId, item);
+async function getMaterialsInventory(characterId) {
+  return db.all(
+    "SELECT material, quantity FROM materials_inventory WHERE characterId = ? AND quantity > 0 ORDER BY material ASC",
+    characterId
+  );
 }
 
 async function addMaterialToInventory(characterId, materiale, quantita) {
-  for (let i = 0; i < quantita; i++) {
-    await addInventoryItem(characterId, capitalize(materiale));
-  }
+  if (quantita <= 0) return;
+
+  await db.run(
+    `INSERT INTO materials_inventory (characterId, material, quantity)
+     VALUES (?, ?, ?)
+     ON CONFLICT(characterId, material)
+     DO UPDATE SET quantity = quantity + excluded.quantity`,
+    characterId,
+    materiale.toLowerCase(),
+    quantita
+  );
 }
 
-async function getFarmCount(characterId) {
-  const row = await db.get(
-    "SELECT count FROM daily_farms WHERE characterId = ? AND date = ?",
+async function getFortress(characterId) {
+  return db.get(
+    "SELECT name, level FROM fortresses WHERE characterId = ?",
+    characterId
+  );
+}
+
+async function setFortress(characterId, name, level) {
+  await db.run(
+    `INSERT INTO fortresses (characterId, name, level)
+     VALUES (?, ?, ?)
+     ON CONFLICT(characterId)
+     DO UPDATE SET name = excluded.name, level = excluded.level`,
     characterId,
-    todayKey()
+    name,
+    level
+  );
+}
+
+async function deleteFortress(characterId) {
+  await db.run("DELETE FROM fortresses WHERE characterId = ?", characterId);
+}
+
+async function getWeeklyFarmCount(characterId) {
+  const weekStart = getCurrentWeekStartKey();
+
+  const row = await db.get(
+    "SELECT count FROM weekly_farms WHERE characterId = ? AND weekStart = ?",
+    characterId,
+    weekStart
   );
 
   return row?.count || 0;
 }
 
-async function incrementFarmCount(characterId) {
+async function incrementWeeklyFarmCount(characterId) {
+  const weekStart = getCurrentWeekStartKey();
+
   await db.run(
-    `INSERT INTO daily_farms (characterId, date, count)
+    `INSERT INTO weekly_farms (characterId, weekStart, count)
      VALUES (?, ?, 1)
-     ON CONFLICT(characterId, date)
+     ON CONFLICT(characterId, weekStart)
      DO UPDATE SET count = count + 1`,
     characterId,
-    todayKey()
+    weekStart
   );
 }
 
-async function canFarmToday(pg) {
-  const count = await getFarmCount(pg.id);
+async function canFarmThisWeek(pg) {
+  const count = await getWeeklyFarmCount(pg.id);
   const limit = getProficiencyBonus(pg.level || 1);
   return count < limit;
 }
 
-function getFortezza(charId) {
-  const data = loadJSON(FORTEZZE_FILE);
-  return data[String(charId)] || null;
-}
+// === SLASH COMMANDS ===
 
-function setFortezza(charId, nomeFort, livello) {
-  const data = loadJSON(FORTEZZE_FILE);
-  data[String(charId)] = { nome_fortezza: nomeFort, livello };
-  saveJSON(FORTEZZE_FILE, data);
-}
+const commands = [
+  new SlashCommandBuilder()
+    .setName("aiuto_miniere")
+    .setDescription("Mostra i comandi di Grumni. Sì, purtroppo devi leggere."),
 
-function setLivelloFortezza(charId, livello) {
-  const data = loadJSON(FORTEZZE_FILE);
-  const cid = String(charId);
+  new SlashCommandBuilder()
+    .setName("scheda_farming")
+    .setDescription("Mostra scheda farming, fortezza e materiali di un tuo PG.")
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Nome del tuo PG")
+        .setRequired(true)
+        .setAutocomplete(true)
+    ),
 
-  if (data[cid]) {
-    data[cid].livello = livello;
-  } else {
-    data[cid] = { nome_fortezza: 'Senza Nome', livello };
+  new SlashCommandBuilder()
+    .setName("farm")
+    .setDescription("Farma un materiale con un tuo PG.")
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Nome del tuo PG")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(o =>
+      o.setName("materiale")
+        .setDescription("Materiale da cercare")
+        .setRequired(true)
+        .setAutocomplete(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("materiali")
+    .setDescription("Mostra la mappa delle miniere e dei materiali."),
+
+  new SlashCommandBuilder()
+    .setName("imposta_fortezza")
+    .setDescription("Imposta o modifica la fortezza di un PG.")
+    .addUserOption(o =>
+      o.setName("giocatore")
+        .setDescription("Giocatore proprietario del PG")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Nome del PG")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(o =>
+      o.setName("nome_fortezza")
+        .setDescription("Nome della fortezza")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("livello")
+        .setDescription("Livello fortezza 0-5")
+        .setRequired(true)
+        .setMinValue(0)
+        .setMaxValue(5)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("rimuovi_fortezza")
+    .setDescription("Rimuove la fortezza di un PG.")
+    .addUserOption(o =>
+      o.setName("giocatore")
+        .setDescription("Giocatore proprietario del PG")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Nome del PG")
+        .setRequired(true)
+        .setAutocomplete(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("addpg")
+    .setDescription("Crea un PG nel database condiviso.")
+    .addUserOption(o =>
+      o.setName("giocatore")
+        .setDescription("Giocatore proprietario del PG")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Nome del nuovo PG")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("delpg")
+    .setDescription("Elimina un PG dal database condiviso.")
+    .addUserOption(o =>
+      o.setName("giocatore")
+        .setDescription("Giocatore proprietario del PG")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Nome del PG")
+        .setRequired(true)
+        .setAutocomplete(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("listapg")
+    .setDescription("Lista i PG registrati.")
+    .addUserOption(o =>
+      o.setName("giocatore")
+        .setDescription("Giocatore specifico da controllare")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("addminiera")
+    .setDescription("Crea una nuova miniera.")
+    .addStringOption(o =>
+      o.setName("nome")
+        .setDescription("Nome della miniera")
+        .setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("delminiera")
+    .setDescription("Elimina una miniera.")
+    .addStringOption(o =>
+      o.setName("nome")
+        .setDescription("Nome della miniera")
+        .setRequired(true)
+        .setAutocomplete(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("addmat")
+    .setDescription("Aggiunge un materiale a una miniera.")
+    .addStringOption(o =>
+      o.setName("miniera")
+        .setDescription("Nome della miniera")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(o =>
+      o.setName("materiale")
+        .setDescription("Nome del materiale")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("rarita")
+        .setDescription("Rarità del materiale")
+        .setRequired(true)
+        .addChoices(
+          { name: "Comune", value: "comuni" },
+          { name: "Non Comune", value: "non_comuni" }
+        )
+    )
+    .addStringOption(o =>
+      o.setName("tags")
+        .setDescription("Tag opzionali del materiale")
+        .setRequired(false)
+    )
+    .addStringOption(o =>
+      o.setName("mestieri")
+        .setDescription("Mestieri opzionali separati da virgola")
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("delmat")
+    .setDescription("Rimuove un materiale da una miniera.")
+    .addStringOption(o =>
+      o.setName("miniera")
+        .setDescription("Nome della miniera")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(o =>
+      o.setName("materiale")
+        .setDescription("Nome del materiale")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+].map(c => c.toJSON());
+
+(async () => {
+  try {
+    console.log("Started refreshing Miniere slash commands.");
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    console.log("Successfully reloaded Miniere slash commands.");
+  } catch (error) {
+    console.error("Errore registrazione slash commands Miniere:", error);
   }
+})();
 
-  saveJSON(FORTEZZE_FILE, data);
-}
+// === FARM CORE ===
 
-function caricaMiniere() {
-  const data = loadJSON(MINIERE_FILE);
-  const numMiniere = Object.keys(data).length;
-
-  if (numMiniere === 0) {
-    console.warn(`⚠️ miniere.json vuoto o non trovato in ${MINIERE_FILE}`);
-  }
-
-  return data;
-}
-
-function getNome(mat) {
-  return typeof mat === 'object' ? mat.nome.toLowerCase() : mat.toLowerCase();
-}
-
-function getMestieri(mat) {
-  return typeof mat === 'object' ? (mat.mestieri || []) : [];
-}
-
-function getTags(mat) {
-  return typeof mat === 'object' ? (mat.tags || '') : '';
-}
-
-function trovaMateriale(miniere, nomeMat) {
-  const nl = nomeMat.toLowerCase();
-
-  for (const [miniera, dati] of Object.entries(miniere)) {
-    for (const mat of (dati.comuni || [])) {
-      if (getNome(mat) === nl) {
-        return {
-          miniera,
-          rarita: 'comuni',
-          mestieri: getMestieri(mat),
-          tags: getTags(mat)
-        };
-      }
-    }
-
-    for (const mat of (dati.non_comuni || [])) {
-      if (getNome(mat) === nl) {
-        return {
-          miniera,
-          rarita: 'non_comuni',
-          mestieri: getMestieri(mat),
-          tags: getTags(mat)
-        };
-      }
-    }
-  }
-
-  return null;
-}
-
-function tuttiNomiMateriali(miniere) {
-  const nomi = new Set();
-
-  for (const dati of Object.values(miniere)) {
-    for (const mat of [...(dati.comuni || []), ...(dati.non_comuni || [])]) {
-      nomi.add(getNome(mat));
-    }
-  }
-
-  return [...nomi];
-}
-
-function suggerisciMateriale(miniere, input, max = 3) {
-  const il = input.toLowerCase();
-  const nomi = tuttiNomiMateriali(miniere);
-  const sugg = [];
-
-  for (const nome of nomi) {
-    if (il.includes(nome) || nome.includes(il)) {
-      sugg.push([0, nome]);
-      continue;
-    }
-
-    let cs = 0;
-
-    for (let i = 0; i < Math.min(il.length, nome.length); i++) {
-      if (il[i] === nome[i]) cs++;
-      else break;
-    }
-
-    if (cs >= 3) {
-      sugg.push([1, nome]);
-      continue;
-    }
-
-    const pi = new Set(il.split(' '));
-    const pn = new Set(nome.split(' '));
-
-    if ([...pi].some(w => pn.has(w))) {
-      sugg.push([2, nome]);
-    }
-  }
-
-  sugg.sort((a, b) => a[0] - b[0]);
-  return sugg.slice(0, max).map(s => s[1]);
-}
-
-function calcolaRisultato(dado, fortezza, rarita) {
-  const totale = dado + fortezza;
-
-  if (rarita === 'comuni') {
-    if (totale <= 3) return 0;
-    if (totale <= 8) return 1;
-    return 2;
-  }
-
-  if (totale <= 8) return 0;
-  if (totale <= 11) return 1;
-  return 2;
-}
-
-const farmingInCorso = new Map();
-const fortezzaSetup = new Map();
-
-async function eseguiFarm(channel, author, pg, fortezza, materiale, miniera, rarita, mestieri = [], tags = '') {
-  const livFort = fortezza.livello;
-  const nomeFort = fortezza.nome_fortezza;
+async function eseguiFarm(interaction, pg, fortezza, materiale, miniera, rarita, mestieri = [], tags = "") {
+  const livFort = fortezza.level;
+  const nomeFort = fortezza.name;
   const dado = randInt(1, 10);
   const totale = dado + livFort;
   const quantita = calcolaRisultato(dado, livFort, rarita);
 
-  await incrementFarmCount(pg.id);
+  await incrementWeeklyFarmCount(pg.id);
 
   if (quantita > 0) {
     await addMaterialToInventory(pg.id, materiale, quantita);
   }
 
-  const farmCount = await getFarmCount(pg.id);
+  const farmCount = await getWeeklyFarmCount(pg.id);
   const farmLimit = getProficiencyBonus(pg.level || 1);
 
   const matDisplay = capitalize(materiale);
   const nomePg = pg.name;
-  const dataRicerca = now();
+  const dataRicerca = nowRome();
   const v = { pg: nomePg, mat: matDisplay, miniera, q: quantita, ora: dataRicerca };
 
   let frase;
 
   if (quantita === 0) {
-    frase = rarita === 'non_comuni' && totale >= 4
+    frase = rarita === "non_comuni" && totale >= 4
       ? fmt(pick(FRASI_NON_COMUNE_ZERO), v)
       : fmt(pick(FRASI_ZERO), v);
   } else if (quantita === 1) {
@@ -500,7 +784,7 @@ async function eseguiFarm(channel, author, pg, fortezza, materiale, miniera, rar
     frase = fmt(pick(FRASI_TROVATO_2), v);
   }
 
-  const tipoRar = rarita === 'comuni' ? '⚪ Comune' : '🟣 Non Comune';
+  const tipoRar = rarita === "comuni" ? "⚪ Comune" : "🟣 Non Comune";
   const matConTag = tags ? `${tags} ${matDisplay}` : matDisplay;
 
   const embed = new EmbedBuilder()
@@ -508,365 +792,311 @@ async function eseguiFarm(channel, author, pg, fortezza, materiale, miniera, rar
     .setDescription(frase)
     .setColor(quantita > 0 ? 0x2ecc71 : 0xe74c3c)
     .addFields(
-      { name: '👤 Personaggio', value: nomePg, inline: true },
-      { name: '🏰 Fortezza', value: `${nomeFort} (Lv. ${livFort})`, inline: true },
-      { name: '⛏️ Luogo di Ricerca', value: miniera, inline: true },
-      { name: '🔍 Materiale Cercato', value: `${matConTag} (${tipoRar})`, inline: true },
-      { name: '📦 Quantità Raccolta', value: `**${quantita}**`, inline: true },
+      { name: "👤 Personaggio", value: nomePg, inline: true },
+      { name: "🏰 Fortezza", value: `${nomeFort} (Lv. ${livFort})`, inline: true },
+      { name: "⛏️ Luogo di Ricerca", value: miniera, inline: true },
+      { name: "🔍 Materiale Cercato", value: `${matConTag} (${tipoRar})`, inline: true },
+      { name: "📦 Quantità Raccolta", value: `**${quantita}**`, inline: true },
       {
-        name: '🧺 Inventario',
+        name: "🧺 Inventario Materiali",
         value: quantita > 0
           ? `Aggiunto automaticamente: **${quantita}x ${matDisplay}**`
-          : 'Nessun materiale aggiunto',
+          : "Nessun materiale aggiunto, perché evidentemente oggi il piccone era decorativo.",
         inline: true
       },
-      { name: '📆 Farm Giornalieri', value: `${farmCount} / ${farmLimit}`, inline: true },
-      { name: '🎲 Dado', value: `${dado} + ${livFort} (fortezza) = **${totale}**`, inline: true },
-      { name: '📅 Data Ricerca', value: dataRicerca, inline: true },
+      { name: "📆 Farm Settimanali", value: `${farmCount} / ${farmLimit}`, inline: true },
+      { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
+      { name: "🎲 Dado", value: `${dado} + ${livFort} (fortezza) = **${totale}**`, inline: true },
+      { name: "📅 Data Ricerca", value: dataRicerca, inline: true }
     )
     .setFooter({ text: `— ${NOME_BOT}, Maestro delle Miniere (e della tua miseria)` });
 
-  await channel.send({ content: `<@${author.id}>`, embeds: [embed] });
+  return interaction.reply({ content: `<@${interaction.user.id}>`, embeds: [embed] });
 }
 
-client.once('ready', () => {
+// === EVENTS ===
+
+client.once("clientReady", () => {
   console.log(`⛏️ ${NOME_BOT} online come ${client.user.tag}!`);
-  console.log(`Prefisso: ${PREFIX}`);
   console.log(`Server connessi: ${client.guilds.cache.size}`);
   console.log(`DB Westmarch SQLite: ${DB_PATH}`);
   console.log(`File miniere: ${MINIERE_FILE}`);
-  console.log(`File fortezze: ${FORTEZZE_FILE}`);
 
-  client.user.setActivity('a rompere picconi | !farm', {
+  client.user.setActivity("a rompere picconi | /farm", {
     type: ActivityType.Playing
   });
 });
 
-client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
+client.on("interactionCreate", async interaction => {
+  try {
+    if (interaction.isAutocomplete()) {
+      const focused = interaction.options.getFocused(true);
+      const miniere = caricaMiniere();
 
-  if (!message.content.startsWith(PREFIX)) {
-    const userId = message.author.id;
+      if (focused.name === "nome_pg") {
+        let user = interaction.user;
 
-    if (fortezzaSetup.has(userId)) {
-      const stato = fortezzaSetup.get(userId);
-      if (message.channel.id !== stato.canale) return;
+        const selectedUser =
+          interaction.options.getUser("giocatore") ||
+          interaction.options.getUser("utente");
 
-      const testo = message.content.trim();
+        if (selectedUser) user = selectedUser;
 
-      if (stato.fase === 'nome_fortezza') {
-        if (testo.length > 50) {
-          return message.channel.send(`🙄 ${message.author}, 50 caratteri max. Non è un romanzo.`);
-        }
+        const pgs = await getPersonaggiUtente(user.id);
+        const filtered = pgs
+          .map(pg => pg.name)
+          .filter(name => name.toLowerCase().startsWith(focused.value.toLowerCase()))
+          .slice(0, 25);
 
-        stato.nomeFortezza = testo;
-        stato.fase = 'livello_fortezza';
-
-        return message.channel.send(
-          `🏰 **${testo}**? Suona come un posto dove piove dentro. Vabbè.\n` +
-          `**Livello fortezza?** (0-5)`
-        );
+        return interaction.respond(filtered.map(name => ({ name, value: name })));
       }
 
-      if (stato.fase === 'livello_fortezza') {
-        const livello = parseInt(testo);
+      if (focused.name === "materiale") {
+        const materiali = tuttiNomiMateriali(miniere);
+        const filtered = materiali
+          .filter(m => m.toLowerCase().includes(focused.value.toLowerCase()))
+          .slice(0, 25);
 
-        if (isNaN(livello)) {
-          return message.channel.send(`🤨 ${message.author}, un NUMERO. Da 0 a 5. N-U-M-E-R-O.`);
-        }
+        return interaction.respond(filtered.map(m => ({ name: capitalize(m), value: m })));
+      }
 
-        if (livello < 0 || livello > 5) {
-          return message.channel.send(`🙄 ${message.author}, da 0 a 5. Hai scritto ${livello}. Sai contare?`);
-        }
+      if (focused.name === "miniera" || focused.name === "nome") {
+        const nomi = tuttiNomiMiniere(miniere);
+        const filtered = nomi
+          .filter(m => m.toLowerCase().includes(focused.value.toLowerCase()))
+          .slice(0, 25);
 
-        setFortezza(stato.characterId, stato.nomeFortezza, livello);
-        fortezzaSetup.delete(userId);
+        return interaction.respond(filtered.map(m => ({ name: m, value: m })));
+      }
 
-        const embed = new EmbedBuilder()
-          .setTitle('🏰 Fortezza Registrata!')
-          .setDescription(`**${stato.nomePg}** ora ha una fortezza. Quasi impressionante. Quasi.`)
-          .setColor(0x2ecc71)
-          .addFields(
-            { name: '👤 Personaggio', value: stato.nomePg, inline: true },
-            { name: '🏰 Fortezza', value: `${stato.nomeFortezza} (Lv. ${livello})`, inline: true },
-          )
-          .setFooter({ text: `— ${NOME_BOT}` });
+      return interaction.respond([]);
+    }
 
-        return message.channel.send({
-          content: `${message.author}`,
-          embeds: [embed]
+    if (!interaction.isChatInputCommand()) return;
+
+    const command = interaction.commandName;
+    const isBeta = hasBetaRole(interaction.member);
+
+    if (!isBeta) {
+      return interaction.reply({
+        content: `🚫 Serve il ruolo **${BETA_ROLE_NAME}**, verme. — **${NOME_BOT}**`,
+        ephemeral: true
+      });
+    }
+
+    if (command === "aiuto_miniere") {
+      const embed = new EmbedBuilder()
+        .setTitle(`⛏️ ${NOME_BOT} — Comandi`)
+        .setDescription(`Ascolta bene perché **${NOME_BOT}** non ripete. Mai. Tranne ora, perché Discord mi obbliga a essere leggibile.`)
+        .setColor(0xb8860b)
+        .addFields(
+          {
+            name: "⛏️ Farming",
+            value:
+              "`/farm nome_pg materiale` — Cerca un materiale\n" +
+              "`/scheda_farming nome_pg` — Vedi fortezza, farm e materiali\n" +
+              "`/materiali` — Mappa miniere",
+            inline: false
+          },
+          {
+            name: "🏰 Fortezze",
+            value:
+              "`/imposta_fortezza giocatore nome_pg nome_fortezza livello`\n" +
+              "`/rimuovi_fortezza giocatore nome_pg`",
+            inline: false
+          },
+          {
+            name: "🔧 Gestione Miniere",
+            value:
+              "`/addminiera nome`\n" +
+              "`/delminiera nome`\n" +
+              "`/addmat miniera materiale rarita`\n" +
+              "`/delmat miniera materiale`",
+            inline: false
+          },
+          {
+            name: "👥 Gestione PG",
+            value:
+              "`/addpg giocatore nome_pg`\n" +
+              "`/delpg giocatore nome_pg`\n" +
+              "`/listapg [giocatore]`",
+            inline: false
+          },
+          {
+            name: "📆 Limite Farming",
+            value:
+              "Ogni PG può farmare a settimana un numero di volte pari al suo **bonus competenza**.\n" +
+              "Reset automatico: **lunedì a mezzanotte**.",
+            inline: false
+          },
+          {
+            name: "📊 Tabella Risultati",
+            value:
+              "**Comune:** 1-3=0 | 4-8=1 | 9+=2\n" +
+              "**Non Comune:** 1-8=0 | 9-11=1 | 12+=2",
+            inline: false
+          }
+        )
+        .setFooter({ text: `— ${NOME_BOT}, già stanco di spiegare cose ovvie` });
+
+      return interaction.reply({ embeds: [embed], ephemeral: true });
+    }
+
+    if (command === "scheda_farming") {
+      const nomePg = interaction.options.getString("nome_pg");
+      const pg = await getPersonaggioByName(interaction.user.id, nomePg);
+
+      if (!pg) {
+        return interaction.reply({
+          content: fmt(pick(FRASI_NO_PG), { name: `<@${interaction.user.id}>` }),
+          ephemeral: true
         });
       }
 
-      return;
-    }
-
-    if (farmingInCorso.has(userId)) {
-      const stato = farmingInCorso.get(userId);
-      if (message.channel.id !== stato.canale) return;
-
-      if (stato.fase === 'scelta_pg') {
-        const scelta = parseInt(message.content.trim());
-
-        if (isNaN(scelta)) {
-          return message.channel.send(`🤨 ${message.author}, un NUMERO. Il numero del personaggio. Quanto è difficile?`);
-        }
-
-        if (scelta < 1 || scelta > stato.personaggi.length) {
-          return message.channel.send(`🙄 ${message.author}, da 1 a ${stato.personaggi.length}. Hai scritto ${scelta}. Sei daltonico anche coi numeri?`);
-        }
-
-        const pg = stato.personaggi[scelta - 1];
-        const fortezza = pg.fortezza;
-        farmingInCorso.delete(userId);
-
-        if (!fortezza) {
-          return message.channel.send(fmt(pick(FRASI_NO_FORTEZZA), {
-            name: `${message.author}`,
-            pg: pg.name
-          }));
-        }
-
-        if (!(await canFarmToday(pg))) {
-          const count = await getFarmCount(pg.id);
-          const limit = getProficiencyBonus(pg.level || 1);
-
-          return message.channel.send(
-            `⛏️ **${pg.name}** ha già farmato **${count} / ${limit}** volte oggi.\n` +
-            `Il limite giornaliero è pari al bonus competenza: **+${limit}**.`
-          );
-        }
-
-        return eseguiFarm(
-          message.channel,
-          message.author,
-          pg,
-          fortezza,
-          stato.materiale,
-          stato.miniera,
-          stato.rarita,
-          stato.mestieri,
-          stato.tags
-        );
-      }
-    }
-
-    return;
-  }
-
-  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-  const command = args.shift().toLowerCase();
-  const isBeta = hasBetaRole(message.member);
-
-  if (command === 'aiuto') {
-    const embed = new EmbedBuilder()
-      .setTitle(`⛏️ ${NOME_BOT} — Comandi`)
-      .setDescription(`Ascolta bene perché **${NOME_BOT}** non ripete. Mai.`)
-      .setColor(0xb8860b)
-      .addFields(
-        {
-          name: '📋 Personaggi & Fortezze',
-          value:
-            '`!scheda` — Vedi i tuoi personaggi + fortezze\n' +
-            '`!fortezza <nome_pg> setup` — Imposta nome e livello\n' +
-            '`!fortezza <nome_pg> <livello>` — Aggiorna solo il livello',
-          inline: false
-        },
-        {
-          name: '⛏️ Farming',
-          value:
-            '`!farm <materiale>` — Cerca un materiale\n' +
-            '`!farm` — Lista materiali\n' +
-            '`!materiali` — Mappa miniere',
-          inline: false
-        },
-        {
-          name: '🔧 Gestione Miniere',
-          value:
-            '`!addminiera <nome>`\n' +
-            '`!delminiera <nome>`\n' +
-            '`!addmat <miniera> | <materiale> | <comune/non_comune>`\n' +
-            '`!delmat <miniera> | <materiale>`\n' +
-            'Richiede ruolo **Beta**.',
-          inline: false
-        },
-        {
-          name: '👥 Gestione PG',
-          value:
-            '`!addpg @utente <nome>`\n' +
-            '`!delpg @utente <nome>`\n' +
-            '`!listapg [@utente]`\n' +
-            'Richiede ruolo **Beta**.',
-          inline: false
-        },
-        {
-          name: '🎲 Come funziona',
-          value:
-            '1. Crea un PG\n' +
-            '2. `!fortezza <pg> setup`\n' +
-            '3. `!farm <materiale>`\n' +
-            '4. Dado + fortezza = risultato\n' +
-            '5. Trovi 0, 1 o 2 materiali. Probabilmente 0.',
-          inline: false
-        },
-        {
-          name: '📊 Tabella Risultati',
-          value:
-            '**Comune:** 1-3=0 | 4-8=1 | 9-15=2\n' +
-            '**Non Comune:** 1-8=0 | 9-11=1 | 12-15=2',
-          inline: false
-        },
-      );
-
-    return message.channel.send({ embeds: [embed] });
-  }
-
-  if (command === 'scheda') {
-    const pgs = await getPersonaggiUtente(message.author.id);
-
-    if (!pgs.length) {
-      return message.channel.send(fmt(pick(FRASI_NO_PG), {
-        name: `${message.author}`
-      }));
-    }
-
-    const embed = new EmbedBuilder()
-      .setTitle(`📋 Personaggi di ${message.author.displayName}`)
-      .setDescription('Ecco i tuoi schiav— ehm, personaggi.')
-      .setColor(0x3498db)
-      .setFooter({ text: `— ${NOME_BOT}, che tiene il registro dei disgraziati` });
-
-    for (const pg of pgs) {
-      const fort = getFortezza(pg.id);
-      const inventory = await getInventory(pg.id);
+      const fort = await getFortress(pg.id);
+      const materials = await getMaterialsInventory(pg.id);
       const limit = getProficiencyBonus(pg.level || 1);
-      const count = await getFarmCount(pg.id);
+      const count = await getWeeklyFarmCount(pg.id);
 
       const fortInfo = fort
-        ? `🏰 **${fort.nome_fortezza}** (Lv. ${fort.livello})`
-        : '🏚️ *Nessuna fortezza*';
+        ? `🏰 **${fort.name}** (Lv. ${fort.level})`
+        : "🏚️ *Nessuna fortezza*";
 
-      embed.addFields({
-        name: `${pg.name} — Lv. ${pg.level} | Comp. +${limit}`,
-        value:
-          `XP: ${pg.xp} | 💰 Gold: ${pg.gold} | 🏦 Deposito: ${pg.bank}\n` +
-          `Farm oggi: **${count} / ${limit}**\n` +
-          `${fortInfo}\n` +
-          `Inventario: ${inventory.length ? inventory.join(', ') : 'Vuoto'}`,
-        inline: false
-      });
+      const embed = new EmbedBuilder()
+        .setTitle(`📋 Scheda Farming — ${pg.name}`)
+        .setDescription("Ecco il tuo curriculum da minatore. Fa già ridere così.")
+        .setColor(0x3498db)
+        .addFields(
+          { name: "👤 Personaggio", value: pg.name, inline: true },
+          { name: "⚔️ Livello", value: `${pg.level}`, inline: true },
+          { name: "🧠 Competenza", value: `+${limit}`, inline: true },
+          { name: "📆 Farm Settimanali", value: `${count} / ${limit}`, inline: true },
+          { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
+          { name: "🏰 Fortezza", value: fortInfo, inline: false },
+          { name: "🧺 Inventario Materiali", value: formatMaterials(materials), inline: false }
+        )
+        .setFooter({ text: `— ${NOME_BOT}, contabile della tua fatica inutile` });
+
+      return interaction.reply({ embeds: [embed], ephemeral: false });
     }
 
-    return message.channel.send({ embeds: [embed] });
-  }
+    if (command === "farm") {
+      const nomePg = interaction.options.getString("nome_pg");
+      const materiale = interaction.options.getString("materiale").trim().toLowerCase();
 
-  if (command === 'fortezza') {
-    const raw = args.join(' ').trim();
+      const pg = await getPersonaggioByName(interaction.user.id, nomePg);
 
-    if (!raw) {
-      return message.channel.send('⚠️ Uso: `!fortezza <nome_pg> <livello>` oppure `!fortezza <nome_pg> setup`');
-    }
+      if (!pg) {
+        return interaction.reply({
+          content: fmt(pick(FRASI_NO_PG), { name: `<@${interaction.user.id}>` }),
+          ephemeral: true
+        });
+      }
 
-    const parti = raw.replace(/\s+/g, ' ').split(' ');
-    const azione = parti.pop().toLowerCase();
-    const nomePg = parti.join(' ');
+      const miniere = caricaMiniere();
+      const trovato = trovaMateriale(miniere, materiale);
 
-    if (!nomePg) {
-      return message.channel.send('⚠️ Uso: `!fortezza <nome_pg> <livello>`');
-    }
+      if (!trovato) {
+        const sugg = suggerisciMateriale(miniere, materiale);
 
-    const pg = await getPersonaggioByName(message.author.id, nomePg);
+        let msg = `🤷 **${capitalize(materiale)}**?! <@${interaction.user.id}>, ma che cazzo è? Non esiste in nessuna delle MIE miniere.`;
 
-    if (!pg) {
-      return message.channel.send(`🤷 ${message.author}, **${nomePg}**? Non esiste nel registro.`);
-    }
+        if (sugg.length) {
+          msg += `\n\n🧠 Forse volevi dire... ${sugg.map(s => `\`${s}\``).join(", ")}? Scrivi bene, analfabeta.`;
+        } else {
+          msg += "\nUsa `/materiali` per vedere cosa c'è davvero, ignorante.";
+        }
 
-    if (azione === 'setup') {
-      fortezzaSetup.set(message.author.id, {
-        fase: 'nome_fortezza',
-        canale: message.channel.id,
-        characterId: pg.id,
-        nomePg: pg.name
-      });
+        return interaction.reply({ content: msg, ephemeral: true });
+      }
 
-      return message.channel.send(
-        `🏰 ${message.author}, ok, impostiamo la fortezza di **${pg.name}**.\n` +
-        `**Come si chiama 'sta catapecchia?** Scrivi il nome.`
+      const fortezza = await getFortress(pg.id);
+
+      if (!fortezza) {
+        return interaction.reply({
+          content: fmt(pick(FRASI_NO_FORTEZZA), {
+            name: `<@${interaction.user.id}>`,
+            pg: pg.name
+          }),
+          ephemeral: true
+        });
+      }
+
+      if (!(await canFarmThisWeek(pg))) {
+        const count = await getWeeklyFarmCount(pg.id);
+        const limit = getProficiencyBonus(pg.level || 1);
+
+        return interaction.reply({
+          content:
+            `⛏️ **${pg.name}** ha già farmato **${count} / ${limit}** volte questa settimana.\n` +
+            `Il limite settimanale è pari al bonus competenza: **+${limit}**.\n` +
+            `Reset: **lunedì a mezzanotte**. Siediti, respira, smetti di molestare le mie miniere.`,
+          ephemeral: true
+        });
+      }
+
+      return eseguiFarm(
+        interaction,
+        pg,
+        fortezza,
+        materiale,
+        trovato.miniera,
+        trovato.rarita,
+        trovato.mestieri,
+        trovato.tags
       );
     }
 
-    const livello = parseInt(azione);
-
-    if (isNaN(livello)) {
-      return message.channel.send('⚠️ Uso: `!fortezza <nome_pg> <livello>` — numero da 0 a 5.');
-    }
-
-    if (livello < 0 || livello > 5) {
-      return message.channel.send(`🙄 ${message.author}, da 0 a 5. Hai scritto ${livello}. Sai contare?`);
-    }
-
-    setLivelloFortezza(pg.id, livello);
-    const fort = getFortezza(pg.id);
-
-    return message.channel.send(
-      `🏰 ${message.author}, fortezza di **${pg.name}** aggiornata!\n` +
-      `**${fort.nome_fortezza}** — Livello **${livello}**`
-    );
-  }
-
-  if (command === 'farm') {
-    const materiale = args.join(' ').trim().toLowerCase();
-
-    if (!materiale) {
+    if (command === "materiali") {
       const miniere = caricaMiniere();
       const embeds = [];
 
       let currentEmbed = new EmbedBuilder()
         .setTitle(`⛏️ ${NOME_BOT} — Lista Materiali`)
-        .setDescription('Usa `!farm <nome materiale>` o levati dai piedi.')
+        .setDescription("Usa `/farm nome_pg materiale` o levati dai piedi.")
         .setColor(0xf1c40f);
 
       let fieldCount = 0;
 
       for (const [minieraNome, dati] of Object.entries(miniere)) {
-        let valore = '';
+        let valore = "";
 
         for (const m of (dati.comuni || [])) {
-          const mestStr = getMestieri(m).map(capitalize).join(', ');
-          valore += `⚪ ${getTags(m)} ${capitalize(getNome(m))} *(${mestStr})*\n`;
+          const mestStr = getMestieri(m).map(capitalize).join(", ");
+          valore += `⚪ ${getTags(m)} ${capitalize(getNome(m))}${mestStr ? ` *(${mestStr})*` : ""}\n`;
         }
 
         for (const m of (dati.non_comuni || [])) {
-          const mestStr = getMestieri(m).map(capitalize).join(', ');
-          valore += `🟣 ${getTags(m)} ${capitalize(getNome(m))} *(${mestStr})*\n`;
+          const mestStr = getMestieri(m).map(capitalize).join(", ");
+          valore += `🟣 ${getTags(m)} ${capitalize(getNome(m))}${mestStr ? ` *(${mestStr})*` : ""}\n`;
         }
 
-        if (!valore) continue;
+        if (!valore) valore = "Vuota. Come certe promesse dei giocatori.";
 
         if (valore.length > 1024) {
-          const righe = valore.split('\n').filter(r => r);
-          let chunk = '';
+          const righe = valore.split("\n").filter(r => r);
+          let chunk = "";
           let partNum = 1;
 
           for (const riga of righe) {
             if (chunk.length + riga.length + 1 > 1020) {
               currentEmbed.addFields({
-                name: `⛏️ ${minieraNome}${partNum > 1 ? ` (${partNum})` : ''}`,
+                name: `⛏️ ${minieraNome}${partNum > 1 ? ` (${partNum})` : ""}`,
                 value: chunk.trim(),
                 inline: false
               });
 
               fieldCount++;
-              chunk = riga + '\n';
+              chunk = riga + "\n";
               partNum++;
             } else {
-              chunk += riga + '\n';
+              chunk += riga + "\n";
             }
           }
 
           if (chunk.trim()) {
             currentEmbed.addFields({
-              name: `⛏️ ${minieraNome}${partNum > 1 ? ` (${partNum})` : ''}`,
+              name: `⛏️ ${minieraNome}${partNum > 1 ? ` (${partNum})` : ""}`,
               value: chunk.trim(),
               inline: false
             });
@@ -896,385 +1126,311 @@ client.on('messageCreate', async (message) => {
 
       embeds.push(currentEmbed);
 
-      for (const emb of embeds) {
-        await message.channel.send({ embeds: [emb] });
+      await interaction.reply({ embeds: [embeds[0]], ephemeral: false });
+
+      for (const emb of embeds.slice(1)) {
+        await interaction.followUp({ embeds: [emb], ephemeral: false });
       }
 
       return;
     }
 
-    const pgs = await getPersonaggiUtente(message.author.id);
+    if (command === "imposta_fortezza") {
+      const user = interaction.options.getUser("giocatore");
+      const nomePg = interaction.options.getString("nome_pg");
+      const nomeFortezza = interaction.options.getString("nome_fortezza");
+      const livello = interaction.options.getInteger("livello");
 
-    if (!pgs.length) {
-      return message.channel.send(fmt(pick(FRASI_NO_PG), {
-        name: `${message.author}`
-      }));
+      const pg = await getPersonaggioByName(user.id, nomePg);
+
+      if (!pg) {
+        return interaction.reply({
+          content: `🤷 **${nomePg}**? Non esiste nel registro di ${user}. Bel tentativo, catasto delle illusioni.`,
+          ephemeral: true
+        });
+      }
+
+      await setFortress(pg.id, nomeFortezza, livello);
+
+      const embed = new EmbedBuilder()
+        .setTitle("🏰 Fortezza Registrata!")
+        .setDescription(`**${pg.name}** ora ha una fortezza. Quasi impressionante. Quasi.`)
+        .setColor(0x2ecc71)
+        .addFields(
+          { name: "👤 Personaggio", value: pg.name, inline: true },
+          { name: "🏰 Fortezza", value: `${nomeFortezza} (Lv. ${livello})`, inline: true }
+        )
+        .setFooter({ text: `— ${NOME_BOT}` });
+
+      return interaction.reply({ content: `${user}`, embeds: [embed] });
     }
 
-    const miniere = caricaMiniere();
-    const trovato = trovaMateriale(miniere, materiale);
+    if (command === "rimuovi_fortezza") {
+      const user = interaction.options.getUser("giocatore");
+      const nomePg = interaction.options.getString("nome_pg");
 
-    if (!trovato) {
-      const sugg = suggerisciMateriale(miniere, materiale);
+      const pg = await getPersonaggioByName(user.id, nomePg);
 
-      let msg = `🤷 **${capitalize(materiale)}**?! ${message.author}, ma che cazzo è? Non esiste in nessuna delle MIE miniere.`;
-
-      if (sugg.length) {
-        msg += `\n\n🧠 Forse volevi dire... ${sugg.map(s => `\`${s}\``).join(', ')}? Scrivi bene, analfabeta.`;
-      } else {
-        msg += '\nUsa `!farm` per vedere cosa c\'è davvero, ignorante.';
+      if (!pg) {
+        return interaction.reply({
+          content: `🤷 **${nomePg}**? Non esiste nel registro di ${user}.`,
+          ephemeral: true
+        });
       }
 
-      return message.channel.send(msg);
+      await deleteFortress(pg.id);
+
+      return interaction.reply(`🏚️ Fortezza rimossa da **${pg.name}**. Ora è ufficialmente un senzatetto del crafting.`);
     }
 
-    if (pgs.length === 1) {
-      const pg = pgs[0];
-      const fortezza = getFortezza(pg.id);
+    if (command === "addpg") {
+      const user = interaction.options.getUser("giocatore");
+      const nomePg = interaction.options.getString("nome_pg").trim();
 
-      if (!fortezza) {
-        return message.channel.send(fmt(pick(FRASI_NO_FORTEZZA), {
-          name: `${message.author}`,
-          pg: pg.name
-        }));
+      const existing = await getPersonaggioByName(user.id, nomePg);
+
+      if (existing) {
+        return interaction.reply({
+          content: `⚠️ **${nomePg}** esiste già per ${user}. Non moltiplichiamo i disastri.`,
+          ephemeral: true
+        });
       }
 
-      if (!(await canFarmToday(pg))) {
-        const count = await getFarmCount(pg.id);
-        const limit = getProficiencyBonus(pg.level || 1);
+      const pgs = await getPersonaggiUtente(user.id);
 
-        return message.channel.send(
-          `⛏️ **${pg.name}** ha già farmato **${count} / ${limit}** volte oggi.\n` +
-          `Il limite giornaliero è pari al bonus competenza: **+${limit}**.`
-        );
+      if (pgs.length >= 3) {
+        return interaction.reply({
+          content: `⚠️ ${user} ha già 3 PG attivi. Tre tragedie bastano e avanzano.`,
+          ephemeral: true
+        });
       }
 
-      return eseguiFarm(
-        message.channel,
-        message.author,
-        pg,
-        fortezza,
-        materiale,
-        trovato.miniera,
-        trovato.rarita,
-        trovato.mestieri,
-        trovato.tags
+      const pg = await aggiungiPgDB(user, nomePg);
+
+      return interaction.reply(
+        `✅ Personaggio **${nomePg}** creato per ${user}. ID: ${pg.id}\n` +
+        `Ora dagli una fortezza con \`/imposta_fortezza\`, se proprio vuoi mandarlo a sporcarsi.`
       );
     }
 
-    const pgConFort = [];
+    if (command === "delpg") {
+      const user = interaction.options.getUser("giocatore");
+      const nomePg = interaction.options.getString("nome_pg");
 
-    for (const pg of pgs) {
-      pgConFort.push({
-        ...pg,
-        fortezza: getFortezza(pg.id)
+      if (await rimuoviPgDB(user.id, nomePg)) {
+        return interaction.reply(`💥 **${nomePg}** di ${user} eliminato. Una cartella in meno, un fallimento in meno.`);
+      }
+
+      return interaction.reply({
+        content: `⚠️ **${nomePg}** non trovato per ${user}.`,
+        ephemeral: true
       });
     }
 
-    farmingInCorso.set(message.author.id, {
-      fase: 'scelta_pg',
-      materiale,
-      miniera: trovato.miniera,
-      rarita: trovato.rarita,
-      mestieri: trovato.mestieri,
-      tags: trovato.tags,
-      canale: message.channel.id,
-      personaggi: pgConFort,
-    });
+    if (command === "listapg") {
+      const user = interaction.options.getUser("giocatore");
 
-    const lista = [];
+      if (user) {
+        const pgs = await getPersonaggiUtente(user.id);
 
-    for (let i = 0; i < pgConFort.length; i++) {
-      const pg = pgConFort[i];
-      const count = await getFarmCount(pg.id);
-      const limit = getProficiencyBonus(pg.level || 1);
+        if (!pgs.length) {
+          return interaction.reply({
+            content: `📋 ${user} non ha PG. Finalmente un registro pulito.`,
+            ephemeral: true
+          });
+        }
 
-      lista.push(
-        `**${i + 1}.** ${pg.name} (Lv. ${pg.level}, Comp. +${limit}) — ` +
-        `Farm oggi: ${count}/${limit} — ` +
-        `${pg.fortezza ? `🏰 ${pg.fortezza.nome_fortezza} (Fort. ${pg.fortezza.livello})` : '🏚️ Nessuna fortezza'}`
-      );
-    }
+        const embed = new EmbedBuilder()
+          .setTitle(`📋 PG di ${user.username}`)
+          .setColor(0x3498db);
 
-    const domanda = fmt(pick(DOMANDE_PERSONAGGIO), {
-      name: message.author.displayName,
-      n: pgConFort.length
-    });
+        for (const pg of pgs) {
+          const f = await getFortress(pg.id);
+          const limit = getProficiencyBonus(pg.level || 1);
+          const count = await getWeeklyFarmCount(pg.id);
 
-    return message.channel.send(`${message.author}\n${domanda}\n\n${lista.join('\n')}`);
-  }
+          embed.addFields({
+            name: `ID ${pg.id} — ${pg.name}`,
+            value:
+              `Lv. ${pg.level} | Comp. +${limit} | Farm settimana ${count}/${limit} | ` +
+              `${f ? `🏰 ${f.name} (Lv. ${f.level})` : "🏚️ Nessuna"}`,
+            inline: false
+          });
+        }
 
-  if (command === 'materiali') {
-    const miniere = caricaMiniere();
+        return interaction.reply({ embeds: [embed] });
+      }
 
-    const embed = new EmbedBuilder()
-      .setTitle(`🗺️ ${NOME_BOT} — Mappa delle MIE Miniere`)
-      .setDescription('Queste sono le MIE miniere. Voi ci entrate perché io ve lo PERMETTO. Chiaro?')
-      .setColor(0xb8860b);
+      const rows = await getAllCharacters();
 
-    for (const [min, dati] of Object.entries(miniere)) {
-      const c = (dati.comuni || []).map(m => capitalize(getNome(m))).join(', ');
-      const nc = (dati.non_comuni || []).map(m => capitalize(getNome(m))).join(', ');
-
-      let val = '';
-
-      if (c) val += `⚪ Comuni: ${c}\n`;
-      if (nc) val += `🟣 Non comuni: ${nc}`;
-
-      embed.addFields({
-        name: `⛏️ ${min}`,
-        value: val || 'Vuota',
-        inline: false
-      });
-    }
-
-    return message.channel.send({ embeds: [embed] });
-  }
-
-  if (command === 'addpg') {
-    if (!isBeta) {
-      return message.channel.send(`🚫 Serve il ruolo **Beta**, verme. — **${NOME_BOT}**`);
-    }
-
-    const utente = message.mentions.members?.first();
-    const nome = args.slice(1).join(' ').trim();
-
-    if (!utente || !nome) {
-      return message.channel.send('⚠️ Uso: `!addpg @utente <nome personaggio>`');
-    }
-
-    const existing = await getPersonaggioByName(utente.id, nome);
-
-    if (existing) {
-      return message.channel.send(`⚠️ **${nome}** esiste già per ${utente.displayName}!`);
-    }
-
-    const pgs = await getPersonaggiUtente(utente.id);
-
-    if (pgs.length >= 3) {
-      return message.channel.send(`⚠️ ${utente.displayName} ha già 3 PG attivi.`);
-    }
-
-    const pg = await aggiungiPgDB(utente.user, nome);
-
-    return message.channel.send(
-      `✅ Personaggio **${nome}** creato per ${utente}! (ID: ${pg.id})\n` +
-      `Ora: \`!fortezza ${nome} setup\``
-    );
-  }
-
-  if (command === 'delpg') {
-    if (!isBeta) {
-      return message.channel.send(`🚫 Serve il ruolo **Beta**, verme. — **${NOME_BOT}**`);
-    }
-
-    const utente = message.mentions.members?.first();
-    const nome = args.slice(1).join(' ').trim();
-
-    if (!utente || !nome) {
-      return message.channel.send('⚠️ Uso: `!delpg @utente <nome personaggio>`');
-    }
-
-    if (await rimuoviPgDB(utente.id, nome)) {
-      return message.channel.send(`💥 **${nome}** di ${utente.displayName} eliminato!`);
-    }
-
-    return message.channel.send(`⚠️ **${nome}** non trovato per ${utente.displayName}.`);
-  }
-
-  if (command === 'listapg') {
-    if (!isBeta) {
-      return message.channel.send(`🚫 Serve il ruolo **Beta**, verme. — **${NOME_BOT}**`);
-    }
-
-    const utente = message.mentions.members?.first();
-
-    if (utente) {
-      const pgs = await getPersonaggiUtente(utente.id);
-
-      if (!pgs.length) {
-        return message.channel.send(`📋 ${utente.displayName} non ha PG.`);
+      if (!rows.length) {
+        return interaction.reply({
+          content: "📋 Nessun PG registrato. Il silenzio. La pace. Quasi mi commuovo.",
+          ephemeral: true
+        });
       }
 
       const embed = new EmbedBuilder()
-        .setTitle(`📋 PG di ${utente.displayName}`)
+        .setTitle("📋 Tutti i PG")
         .setColor(0x3498db);
 
-      for (const pg of pgs) {
-        const f = getFortezza(pg.id);
-        const limit = getProficiencyBonus(pg.level || 1);
-        const count = await getFarmCount(pg.id);
+      const byUser = {};
 
+      for (const pg of rows) {
+        byUser[pg.playerId] ??= [];
+        byUser[pg.playerId].push(pg);
+      }
+
+      for (const [uid, pgs] of Object.entries(byUser)) {
         embed.addFields({
-          name: `ID ${pg.id} — ${pg.name}`,
-          value:
-            `Lv. ${pg.level} | Comp. +${limit} | Farm oggi ${count}/${limit} | ` +
-            `${f ? `🏰 ${f.nome_fortezza} (Lv. ${f.livello})` : '🏚️ Nessuna'}`,
+          name: `👤 User ID: ${uid}`,
+          value: pgs
+            .map(pg => `**${pg.name}** (ID ${pg.id}, Lv. ${pg.level}, Comp. +${getProficiencyBonus(pg.level || 1)})`)
+            .join(", "),
           inline: false
         });
       }
 
-      return message.channel.send({ embeds: [embed] });
+      return interaction.reply({ embeds: [embed] });
     }
 
-    const rows = await db.all("SELECT * FROM characters ORDER BY playerId ASC, id ASC");
+    if (command === "addminiera") {
+      const nome = interaction.options.getString("nome").trim();
+      const miniere = caricaMiniere();
 
-    if (!rows.length) {
-      return message.channel.send('📋 Nessun PG registrato.');
+      if (miniere[nome]) {
+        return interaction.reply({
+          content: `⚠️ **${nome}** esiste già. Non serve duplicare i buchi nel terreno.`,
+          ephemeral: true
+        });
+      }
+
+      miniere[nome] = {
+        comuni: [],
+        non_comuni: []
+      };
+
+      saveJSON(MINIERE_FILE, miniere);
+
+      return interaction.reply(`🆕 Miniera **${nome}** creata! Un altro posto dove la gente andrà a deludermi.`);
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle('📋 Tutti i PG')
-      .setColor(0x3498db);
+    if (command === "delminiera") {
+      const nome = interaction.options.getString("nome").trim();
+      const miniere = caricaMiniere();
 
-    const byUser = {};
+      if (!miniere[nome]) {
+        return interaction.reply({
+          content: `⚠️ **${nome}** non esiste. Stai cercando di demolire un'allucinazione.`,
+          ephemeral: true
+        });
+      }
 
-    for (const pg of rows) {
-      byUser[pg.playerId] ??= [];
-      byUser[pg.playerId].push(pg);
+      delete miniere[nome];
+      saveJSON(MINIERE_FILE, miniere);
+
+      return interaction.reply(`💥 Miniera **${nome}** eliminata! Seppellita meglio della dignità dei minatori.`);
     }
 
-    for (const [uid, pgs] of Object.entries(byUser)) {
-      embed.addFields({
-        name: `👤 User ID: ${uid}`,
-        value: pgs
-          .map(pg => `**${pg.name}** (ID ${pg.id}, Lv. ${pg.level}, Comp. +${getProficiencyBonus(pg.level || 1)})`)
-          .join(', '),
-        inline: false
-      });
+    if (command === "addmat") {
+      const nomeMin = interaction.options.getString("miniera").trim();
+      const mat = interaction.options.getString("materiale").trim().toLowerCase();
+      const rar = interaction.options.getString("rarita");
+      const tags = interaction.options.getString("tags")?.trim() || "";
+      const mestieriRaw = interaction.options.getString("mestieri")?.trim() || "";
+
+      const miniere = caricaMiniere();
+
+      if (!miniere[nomeMin]) {
+        return interaction.reply({
+          content: `⚠️ Miniera **${nomeMin}** non esiste. Prima crea il buco, poi ci butti la roba.`,
+          ephemeral: true
+        });
+      }
+
+      const alreadyExists = [...(miniere[nomeMin].comuni || []), ...(miniere[nomeMin].non_comuni || [])]
+        .some(m => getNome(m) === mat);
+
+      if (alreadyExists) {
+        return interaction.reply({
+          content: `⚠️ **${capitalize(mat)}** esiste già in **${nomeMin}**. Riciclare va bene, duplicare no.`,
+          ephemeral: true
+        });
+      }
+
+      const mestieri = mestieriRaw
+        ? mestieriRaw.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
+        : [];
+
+      const materialToStore = tags || mestieri.length
+        ? { nome: mat, tags, mestieri }
+        : mat;
+
+      miniere[nomeMin][rar].push(materialToStore);
+      saveJSON(MINIERE_FILE, miniere);
+
+      const tipo = rar === "comuni" ? "⚪ Comune" : "🟣 Non Comune";
+
+      return interaction.reply(`✅ **${capitalize(mat)}** (${tipo}) aggiunto a **${nomeMin}**! Grumni approva. Malvolentieri.`);
     }
 
-    return message.channel.send({ embeds: [embed] });
-  }
+    if (command === "delmat") {
+      const nomeMin = interaction.options.getString("miniera").trim();
+      const mat = interaction.options.getString("materiale").trim().toLowerCase();
+      const miniere = caricaMiniere();
 
-  if (command === 'addminiera') {
-    if (!isBeta) {
-      return message.channel.send(`🚫 Serve il ruolo **Beta**, verme. — **${NOME_BOT}**`);
+      if (!miniere[nomeMin]) {
+        return interaction.reply({
+          content: `⚠️ Miniera **${nomeMin}** non esiste.`,
+          ephemeral: true
+        });
+      }
+
+      let rimosso = false;
+
+      for (const r of ["comuni", "non_comuni"]) {
+        const idx = miniere[nomeMin][r].findIndex(m => getNome(m) === mat);
+
+        if (idx !== -1) {
+          miniere[nomeMin][r].splice(idx, 1);
+          rimosso = true;
+          break;
+        }
+      }
+
+      if (!rimosso) {
+        return interaction.reply({
+          content: `⚠️ **${capitalize(mat)}** non trovato in **${nomeMin}**. Neanche il materiale vuole farsi trovare da te.`,
+          ephemeral: true
+        });
+      }
+
+      saveJSON(MINIERE_FILE, miniere);
+
+      return interaction.reply(`🗑️ **${capitalize(mat)}** rimosso da **${nomeMin}**! Pulizia fatta. Incredibile, ogni tanto qualcuno sistema.`);
     }
+  } catch (error) {
+    console.error(`Errore comando /${interaction.commandName}:`, error);
 
-    const nome = args.join(' ').trim();
-
-    if (!nome) {
-      return message.channel.send('⚠️ Uso: `!addminiera <nome>`');
-    }
-
-    const miniere = caricaMiniere();
-
-    if (miniere[nome]) {
-      return message.channel.send(`⚠️ **${nome}** esiste già!`);
-    }
-
-    miniere[nome] = {
-      comuni: [],
-      non_comuni: []
+    const risposta = {
+      content: "❌ Errore interno del bot miniere. Controlla i log Railway.",
+      ephemeral: true
     };
 
-    saveJSON(MINIERE_FILE, miniere);
-
-    return message.channel.send(`🆕 Miniera **${nome}** creata!`);
+    if (interaction.replied || interaction.deferred) {
+      await interaction.followUp(risposta);
+    } else {
+      await interaction.reply(risposta);
+    }
   }
+});
 
-  if (command === 'delminiera') {
-    if (!isBeta) {
-      return message.channel.send(`🚫 Serve il ruolo **Beta**, verme. — **${NOME_BOT}**`);
-    }
+process.on("unhandledRejection", error => {
+  console.error("Unhandled promise rejection:", error);
+});
 
-    const nome = args.join(' ').trim();
-
-    if (!nome) {
-      return message.channel.send('⚠️ Uso: `!delminiera <nome>`');
-    }
-
-    const miniere = caricaMiniere();
-
-    if (!miniere[nome]) {
-      return message.channel.send(`⚠️ **${nome}** non esiste.`);
-    }
-
-    delete miniere[nome];
-    saveJSON(MINIERE_FILE, miniere);
-
-    return message.channel.send(`💥 Miniera **${nome}** eliminata!`);
-  }
-
-  if (command === 'addmat') {
-    if (!isBeta) {
-      return message.channel.send(`🚫 Serve il ruolo **Beta**, verme. — **${NOME_BOT}**`);
-    }
-
-    const raw = args.join(' ');
-    const parti = raw.split('|').map(s => s.trim());
-
-    if (parti.length !== 3) {
-      return message.channel.send('⚠️ Uso: `!addmat <miniera> | <materiale> | <comune/non_comune>`');
-    }
-
-    let [nomeMin, mat, rar] = parti;
-
-    mat = mat.toLowerCase();
-    rar = rar.toLowerCase().replace(' ', '_');
-
-    if (rar === 'comune') rar = 'comuni';
-    if (rar === 'non_comune') rar = 'non_comuni';
-
-    if (!['comuni', 'non_comuni'].includes(rar)) {
-      return message.channel.send('⚠️ Rarità: `comune` o `non_comune`');
-    }
-
-    const miniere = caricaMiniere();
-
-    if (!miniere[nomeMin]) {
-      return message.channel.send(`⚠️ Miniera **${nomeMin}** non esiste.`);
-    }
-
-    miniere[nomeMin][rar].push(mat);
-    saveJSON(MINIERE_FILE, miniere);
-
-    const tipo = rar === 'comuni' ? '⚪ Comune' : '🟣 Non Comune';
-
-    return message.channel.send(`✅ **${capitalize(mat)}** (${tipo}) aggiunto a **${nomeMin}**!`);
-  }
-
-  if (command === 'delmat') {
-    if (!isBeta) {
-      return message.channel.send(`🚫 Serve il ruolo **Beta**, verme. — **${NOME_BOT}**`);
-    }
-
-    const raw = args.join(' ');
-    const parti = raw.split('|').map(s => s.trim());
-
-    if (parti.length !== 2) {
-      return message.channel.send('⚠️ Uso: `!delmat <miniera> | <materiale>`');
-    }
-
-    const [nomeMin, mat] = parti;
-    const matL = mat.toLowerCase();
-    const miniere = caricaMiniere();
-
-    if (!miniere[nomeMin]) {
-      return message.channel.send(`⚠️ Miniera **${nomeMin}** non esiste.`);
-    }
-
-    let rimosso = false;
-
-    for (const r of ['comuni', 'non_comuni']) {
-      const idx = miniere[nomeMin][r].findIndex(m => getNome(m) === matL);
-
-      if (idx !== -1) {
-        miniere[nomeMin][r].splice(idx, 1);
-        rimosso = true;
-        break;
-      }
-    }
-
-    if (!rimosso) {
-      return message.channel.send(`⚠️ **${capitalize(mat)}** non trovato in **${nomeMin}**.`);
-    }
-
-    saveJSON(MINIERE_FILE, miniere);
-
-    return message.channel.send(`🗑️ **${capitalize(mat)}** rimosso da **${nomeMin}**!`);
-  }
+process.on("uncaughtException", error => {
+  console.error("Uncaught exception:", error);
 });
 
 client.login(TOKEN);
