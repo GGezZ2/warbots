@@ -1,11 +1,25 @@
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const token = process.env.WESTMARCH_TOKEN || process.env.TOKEN;
 const guildId = process.env.GUILD_ID;
 const clientId = process.env.CLIENT_ID;
 const DB_PATH = process.env.DB_PATH || "/data/westmarch.db";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const MINIERE_FILE = fs.existsSync(path.join(__dirname, "..", "bot-miniere", "data", "miniere.json"))
+  ? path.join(__dirname, "..", "bot-miniere", "data", "miniere.json")
+  : fs.existsSync(path.join(__dirname, "..", "bot-miniere", "miniere.json"))
+    ? path.join(__dirname, "..", "bot-miniere", "miniere.json")
+    : fs.existsSync(path.join(__dirname, "data", "miniere.json"))
+      ? path.join(__dirname, "data", "miniere.json")
+      : path.join(__dirname, "miniere.json");
 
 if (!token || !clientId || !guildId) {
   console.error("Missing environment variables. Ensure WESTMARCH_TOKEN/TOKEN, CLIENT_ID and GUILD_ID are set.");
@@ -89,6 +103,7 @@ async function initDB() {
   `);
 
   console.log(`SQLite inizializzato: ${DB_PATH}`);
+  console.log(`File miniere usato per tag/materiali: ${MINIERE_FILE}`);
 }
 
 await initDB();
@@ -115,6 +130,7 @@ function getLevelFromXP(xp) {
   for (let lvl = XP_LEVELS.length - 1; lvl >= 0; lvl--) {
     if (xp >= XP_LEVELS[lvl]) return lvl + 1;
   }
+
   return 1;
 }
 
@@ -123,6 +139,7 @@ function getProficiencyBonus(level) {
   if (level >= 13) return 5;
   if (level >= 9) return 4;
   if (level >= 5) return 3;
+
   return 2;
 }
 
@@ -189,9 +206,69 @@ function formatList(list, emptyText = "Vuoto") {
   return list.length ? list.join(", ") : emptyText;
 }
 
+function capitalize(s) {
+  if (!s) return "";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function loadJSON(filepath, defaultVal = {}) {
+  try {
+    if (fs.existsSync(filepath)) {
+      return JSON.parse(fs.readFileSync(filepath, "utf-8"));
+    }
+  } catch (error) {
+    console.error(`Errore lettura ${filepath}:`, error.message);
+  }
+
+  return defaultVal;
+}
+
+function getNomeMaterialeDaJson(mat) {
+  return typeof mat === "object" ? String(mat.nome || "").toLowerCase() : String(mat || "").toLowerCase();
+}
+
+function getTagsMaterialeDaJson(mat) {
+  return typeof mat === "object" ? (mat.tags || "") : "";
+}
+
+function getMestieriMaterialeDaJson(mat) {
+  return typeof mat === "object" ? (mat.mestieri || []) : [];
+}
+
+function findMaterialMetadata(materialName) {
+  const miniere = loadJSON(MINIERE_FILE, {});
+  const target = String(materialName || "").toLowerCase();
+
+  for (const dati of Object.values(miniere)) {
+    for (const mat of [...(dati.comuni || []), ...(dati.non_comuni || [])]) {
+      if (getNomeMaterialeDaJson(mat) === target) {
+        return {
+          tags: getTagsMaterialeDaJson(mat),
+          mestieri: getMestieriMaterialeDaJson(mat)
+        };
+      }
+    }
+  }
+
+  return {
+    tags: "",
+    mestieri: []
+  };
+}
+
+function formatMaterialWithMetadata(row) {
+  const metadata = findMaterialMetadata(row.material);
+  const tags = metadata.tags ? `${metadata.tags} ` : "";
+  const mestieri = metadata.mestieri.length
+    ? ` [${metadata.mestieri.map(capitalize).join(", ")}]`
+    : "";
+
+  return `${row.quantity}x ${tags}${capitalize(row.material)}${mestieri}`;
+}
+
 function formatMaterials(rows) {
   if (!rows.length) return "Vuoto";
-  return rows.map(r => `${r.quantity}x ${r.material}`).join(", ");
+  return rows.map(formatMaterialWithMetadata).join(", ");
 }
 
 async function ensurePlayer(user) {
@@ -316,7 +393,7 @@ async function addMaterialToInventory(characterId, material, quantity) {
      ON CONFLICT(characterId, material)
      DO UPDATE SET quantity = quantity + excluded.quantity`,
     characterId,
-    material,
+    material.toLowerCase(),
     quantity
   );
 }
@@ -446,6 +523,24 @@ const commands = [
     .addStringOption(o => o.setName("note").setDescription("Motivo della modifica").setRequired(true))
     .addUserOption(o => o.setName("giocatore").setDescription("Il giocatore").setRequired(true))
     .addStringOption(o => o.setName("nome").setDescription("Nome del PG").setRequired(true).setAutocomplete(true)),
+
+  new SlashCommandBuilder()
+    .setName("aggiungi_materiale")
+    .setDescription("Aggiunge manualmente materiali all'inventario materiali di un PG.")
+    .addUserOption(o => o.setName("giocatore").setDescription("Il giocatore proprietario del PG").setRequired(true))
+    .addStringOption(o => o.setName("nome").setDescription("Nome del PG").setRequired(true).setAutocomplete(true))
+    .addStringOption(o => o.setName("materiale").setDescription("Nome del materiale").setRequired(true))
+    .addIntegerOption(o => o.setName("quantita").setDescription("Quantità da aggiungere").setRequired(true).setMinValue(1))
+    .addStringOption(o => o.setName("note").setDescription("Motivo dell'aggiunta").setRequired(false)),
+
+  new SlashCommandBuilder()
+    .setName("rimuovi_materiale")
+    .setDescription("Rimuove manualmente materiali dall'inventario materiali di un PG.")
+    .addUserOption(o => o.setName("giocatore").setDescription("Il giocatore proprietario del PG").setRequired(true))
+    .addStringOption(o => o.setName("nome").setDescription("Nome del PG").setRequired(true).setAutocomplete(true))
+    .addStringOption(o => o.setName("materiale").setDescription("Nome del materiale").setRequired(true))
+    .addIntegerOption(o => o.setName("quantita").setDescription("Quantità da rimuovere").setRequired(true).setMinValue(1))
+    .addStringOption(o => o.setName("note").setDescription("Motivo della rimozione").setRequired(false)),
 
   new SlashCommandBuilder()
     .setName("elimina_pg")
@@ -671,6 +766,7 @@ client.on("interactionCreate", async interaction => {
       if (existing.length >= 3) return interaction.reply({ content: "Questo giocatore ha già 3 PG attivi!", ephemeral: true });
 
       await createCharacter(user.id, name);
+
       return interaction.reply(`PG **${name}** creato per ${user.username}.`);
     }
 
@@ -727,6 +823,7 @@ client.on("interactionCreate", async interaction => {
       const name = interaction.options.getString("nome");
 
       const reward = REWARDS[grade];
+
       if (!reward) {
         return interaction.reply({
           content: "Grado non valido. Usa C, C+, B, B+, A, A+, S, S+ o Z.",
@@ -781,6 +878,7 @@ client.on("interactionCreate", async interaction => {
         await db.run("UPDATE characters SET xp = ?, level = ? WHERE id = ?", newXP, newLevel, pg.id);
 
         const levelMsg = await handleLevelUpIfAny(pg.id, before, interaction);
+
         let response = `${user.username} - PG **${pg.name}**: XP ${before} → ${newXP}. Nota: ${note}`;
         if (levelMsg) response += `\n\n${levelMsg}`;
 
@@ -795,6 +893,7 @@ client.on("interactionCreate", async interaction => {
         const newGold = before + amount;
 
         await updateCharacterGold(pg.id, newGold);
+
         return interaction.reply(`${user.username} - PG **${pg.name}**: Gold ${before} → ${newGold}. Nota: ${note}`);
       }
 
@@ -857,6 +956,7 @@ client.on("interactionCreate", async interaction => {
         const newLevel = getLevelFromXP(newXP);
 
         await db.run("UPDATE characters SET xp = ?, level = ? WHERE id = ?", newXP, newLevel, pg.id);
+
         return interaction.reply(`${user.username} - PG **${pg.name}**: XP ${before} → ${newXP}. Nota: ${note}`);
       }
 
@@ -868,6 +968,7 @@ client.on("interactionCreate", async interaction => {
         const newGold = Math.max(0, before - amount);
 
         await updateCharacterGold(pg.id, newGold);
+
         return interaction.reply(`${user.username} - PG **${pg.name}**: Gold ${before} → ${newGold}. Nota: ${note}`);
       }
 
@@ -886,6 +987,7 @@ client.on("interactionCreate", async interaction => {
 
           if (deletedCount > 0) {
             removed.push(rawIt);
+
             if (sintonie.includes(clean)) {
               await clearAttunementByName(pg.id, clean);
               sintonie = sintonie.filter(s => s !== clean);
@@ -905,6 +1007,89 @@ client.on("interactionCreate", async interaction => {
       }
 
       return interaction.reply({ content: "Tipo non valido.", ephemeral: true });
+    }
+
+    if (command === "aggiungi_materiale") {
+      if (!isGM) {
+        return interaction.reply({
+          content: "Solo il ruolo Gm-bot può usare questo comando.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("giocatore");
+      const name = interaction.options.getString("nome");
+      const material = interaction.options.getString("materiale").trim().toLowerCase();
+      const quantity = interaction.options.getInteger("quantita");
+      const note = interaction.options.getString("note") || "Nessuna nota";
+
+      const pg = await getCharacter(user.id, name);
+
+      if (!pg) {
+        return interaction.reply({
+          content: "PG non trovato!",
+          ephemeral: true
+        });
+      }
+
+      await addMaterialToInventory(pg.id, material, quantity);
+
+      const materials = await getMaterialsInventory(pg.id);
+
+      return interaction.reply({
+        content:
+          `🧺 Materiale aggiunto a **${pg.name}**.\n` +
+          `Materiale: **${quantity}x ${formatMaterialWithMetadata({ material, quantity })}**\n` +
+          `Nota: ${note}\n\n` +
+          `Inventario materiali attuale: ${formatMaterials(materials)}`,
+        ephemeral: false
+      });
+    }
+
+    if (command === "rimuovi_materiale") {
+      if (!isGM) {
+        return interaction.reply({
+          content: "Solo il ruolo Gm-bot può usare questo comando.",
+          ephemeral: true
+        });
+      }
+
+      const user = interaction.options.getUser("giocatore");
+      const name = interaction.options.getString("nome");
+      const material = interaction.options.getString("materiale").trim().toLowerCase();
+      const quantity = interaction.options.getInteger("quantita");
+      const note = interaction.options.getString("note") || "Nessuna nota";
+
+      const pg = await getCharacter(user.id, name);
+
+      if (!pg) {
+        return interaction.reply({
+          content: "PG non trovato!",
+          ephemeral: true
+        });
+      }
+
+      const removed = await removeMaterialFromInventory(pg.id, material, quantity);
+      const materials = await getMaterialsInventory(pg.id);
+
+      if (!removed) {
+        return interaction.reply({
+          content:
+            `❌ Impossibile rimuovere **${quantity}x ${capitalize(material)}** da **${pg.name}**.\n` +
+            `Il PG non ne ha abbastanza, oppure non possiede quel materiale.\n\n` +
+            `Inventario materiali attuale: ${formatMaterials(materials)}`,
+          ephemeral: true
+        });
+      }
+
+      return interaction.reply({
+        content:
+          `🧺 Materiale rimosso da **${pg.name}**.\n` +
+          `Materiale: **${quantity}x ${capitalize(material)}**\n` +
+          `Nota: ${note}\n\n` +
+          `Inventario materiali attuale: ${formatMaterials(materials)}`,
+        ephemeral: false
+      });
     }
 
     if (command === "deposito") {
@@ -1092,6 +1277,7 @@ client.on("interactionCreate", async interaction => {
 
         if (deletedCount > 0) {
           removed.push(rawIt);
+
           if (sintonie.includes(clean)) {
             await clearAttunementByName(pg.id, clean);
             sintonie = sintonie.filter(s => s !== clean);
@@ -1217,6 +1403,7 @@ client.on("interactionCreate", async interaction => {
       }
 
       const pg = matches[0];
+
       await deleteCharacterAndData(pg.id);
 
       const remaining = await listCharacters(pg.playerId);
