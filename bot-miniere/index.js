@@ -100,6 +100,15 @@ async function initDB() {
       FOREIGN KEY (characterId) REFERENCES characters(id)
     );
 
+    CREATE TABLE IF NOT EXISTS farm_days (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      characterId INTEGER NOT NULL,
+      farmDate TEXT NOT NULL,
+      createdAt TEXT NOT NULL,
+      UNIQUE(characterId, farmDate),
+      FOREIGN KEY (characterId) REFERENCES characters(id)
+    );
+
     CREATE TABLE IF NOT EXISTS materials_inventory (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       characterId INTEGER NOT NULL,
@@ -275,6 +284,27 @@ function getRomeDateParts(date = new Date()) {
     month: get("month"),
     day: get("day")
   };
+}
+
+function getCurrentRomeDateKey() {
+  const { year, month, day } = getRomeDateParts();
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function addDaysToDateKey(dateKey, daysToAdd) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+
+  date.setUTCDate(date.getUTCDate() + daysToAdd);
+
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDateKeyItalian(dateKey) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+
+  return `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year}`;
 }
 
 function getCurrentWeekStartKey() {
@@ -600,6 +630,44 @@ async function canFarmThisWeek(pg) {
   return count < limit;
 }
 
+async function isFarmDateTaken(characterId, farmDate) {
+  const row = await db.get(
+    "SELECT id FROM farm_days WHERE characterId = ? AND farmDate = ?",
+    characterId,
+    farmDate
+  );
+
+  return Boolean(row);
+}
+
+async function getNextAvailableFarmDate(characterId) {
+  const today = getCurrentRomeDateKey();
+
+  for (let offset = 0; offset < 365; offset++) {
+    const candidate = addDaysToDateKey(today, offset);
+    const taken = await isFarmDateTaken(characterId, candidate);
+
+    if (!taken) return candidate;
+  }
+
+  throw new Error("Nessuna data farming disponibile nei prossimi 365 giorni. Che diamine state combinando con queste miniere?");
+}
+
+async function registerFarmDay(characterId) {
+  const farmDate = await getNextAvailableFarmDate(characterId);
+  const createdAt = new Date().toISOString();
+
+  await db.run(
+    `INSERT INTO farm_days (characterId, farmDate, createdAt)
+     VALUES (?, ?, ?)`,
+    characterId,
+    farmDate,
+    createdAt
+  );
+
+  return farmDate;
+}
+
 // === SLASH COMMANDS ===
 
 const commands = [
@@ -732,6 +800,10 @@ async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rari
 
   await incrementWeeklyFarmCount(pg.id);
 
+  const farmDateKey = await registerFarmDay(pg.id);
+  const farmDateDisplay = formatDateKeyItalian(farmDateKey);
+  const commandExecutedAt = nowRome();
+
   if (quantita > 0) {
     await addMaterialToInventory(pg.id, materialToStore, quantita);
   }
@@ -742,8 +814,7 @@ async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rari
   const matDisplay = capitalize(materiale);
   const matFullDisplay = formatMaterialNameForEmbed(materiale, tags, mestieri);
   const nomePg = pg.name;
-  const dataRicerca = nowRome();
-  const v = { pg: nomePg, mat: matDisplay, miniera, q: quantita, ora: dataRicerca };
+  const v = { pg: nomePg, mat: matDisplay, miniera, q: quantita, ora: commandExecutedAt };
 
   let frase;
 
@@ -781,10 +852,11 @@ async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rari
           : "Nessun materiale aggiunto, perché evidentemente oggi il piccone era decorativo.",
         inline: false
       },
+      { name: "📅 Giorno Farming Registrato", value: farmDateDisplay, inline: true },
+      { name: "🕒 Comando Eseguito", value: commandExecutedAt, inline: true },
       { name: "📆 Farm Settimanali", value: `${farmCount} / ${farmLimit}`, inline: true },
       { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
-      { name: "🎲 Dado", value: `${dado} + ${livFort} (fortezza) = **${totale}**`, inline: true },
-      { name: "📅 Data Ricerca", value: dataRicerca, inline: true }
+      { name: "🎲 Dado", value: `${dado} + ${livFort} (fortezza) = **${totale}**`, inline: true }
     )
     .setFooter({ text: `— ${NOME_BOT}, Maestro delle Miniere (e della tua miseria)` });
 
@@ -906,7 +978,9 @@ client.on("interactionCreate", async interaction => {
             name: "📆 Limite Farming",
             value:
               "Ogni PG può farmare a settimana un numero di volte pari al suo **bonus competenza**.\n" +
-              "Reset automatico: **lunedì a mezzanotte**.\n" +
+              "I materiali vengono aggiunti subito.\n" +
+              "Ogni farm viene registrato sul primo giorno libero del PG: oggi, domani, dopodomani, e così via.\n" +
+              "Reset automatico del limite settimanale: **lunedì a mezzanotte**.\n" +
               "La fortezza non è obbligatoria: se manca, vale **Nessuna fortezza (Lv. 0)**.",
             inline: false
           },
