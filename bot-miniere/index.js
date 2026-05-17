@@ -229,7 +229,7 @@ function nowRome() {
 
 function hasRole(member, roleName) {
   try {
-    return member?.roles?.cache?.some(r => r.name === roleName);
+    return member?.roles?.cache?.some(r => normalizeText(r.name) === normalizeText(roleName));
   } catch {
     return false;
   }
@@ -307,17 +307,23 @@ function formatDateKeyItalian(dateKey) {
   return `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}/${year}`;
 }
 
-function getCurrentWeekStartKey() {
-  const { year, month, day } = getRomeDateParts();
-
-  const localDateAsUTC = new Date(Date.UTC(year, month - 1, day));
-  const dayOfWeek = localDateAsUTC.getUTCDay();
-
+function getWeekStartKeyFromDateKey(dateKey) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  const dayOfWeek = date.getUTCDay();
   const daysSinceMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
 
-  localDateAsUTC.setUTCDate(localDateAsUTC.getUTCDate() - daysSinceMonday);
+  date.setUTCDate(date.getUTCDate() - daysSinceMonday);
 
-  return localDateAsUTC.toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+function getCurrentWeekStartKey() {
+  return getWeekStartKeyFromDateKey(getCurrentRomeDateKey());
+}
+
+function getWeekEndKeyFromWeekStart(weekStartKey) {
+  return addDaysToDateKey(weekStartKey, 6);
 }
 
 function caricaMiniere() {
@@ -599,35 +605,25 @@ async function getFortress(characterId) {
   );
 }
 
-async function getWeeklyFarmCount(characterId) {
-  const weekStart = getCurrentWeekStartKey();
+async function getFarmCountForWeek(characterId, weekStartKey) {
+  const weekEndKey = getWeekEndKeyFromWeekStart(weekStartKey);
 
   const row = await db.get(
-    "SELECT count FROM weekly_farms WHERE characterId = ? AND weekStart = ?",
+    `SELECT COUNT(*) AS count
+     FROM farm_days
+     WHERE characterId = ?
+       AND farmDate >= ?
+       AND farmDate <= ?`,
     characterId,
-    weekStart
+    weekStartKey,
+    weekEndKey
   );
 
   return row?.count || 0;
 }
 
-async function incrementWeeklyFarmCount(characterId) {
-  const weekStart = getCurrentWeekStartKey();
-
-  await db.run(
-    `INSERT INTO weekly_farms (characterId, weekStart, count)
-     VALUES (?, ?, 1)
-     ON CONFLICT(characterId, weekStart)
-     DO UPDATE SET count = count + 1`,
-    characterId,
-    weekStart
-  );
-}
-
-async function canFarmThisWeek(pg) {
-  const count = await getWeeklyFarmCount(pg.id);
-  const limit = getProficiencyBonus(pg.level || 1);
-  return count < limit;
+async function getWeeklyFarmCount(characterId) {
+  return getFarmCountForWeek(characterId, getCurrentWeekStartKey());
 }
 
 async function isFarmDateTaken(characterId, farmDate) {
@@ -640,32 +636,51 @@ async function isFarmDateTaken(characterId, farmDate) {
   return Boolean(row);
 }
 
-async function getNextAvailableFarmDate(characterId) {
+async function getNextAvailableFarmDate(pg) {
   const today = getCurrentRomeDateKey();
+  const limit = getProficiencyBonus(pg.level || 1);
 
   for (let offset = 0; offset < 365; offset++) {
     const candidate = addDaysToDateKey(today, offset);
-    const taken = await isFarmDateTaken(characterId, candidate);
+    const weekStart = getWeekStartKeyFromDateKey(candidate);
 
-    if (!taken) return candidate;
+    const taken = await isFarmDateTaken(pg.id, candidate);
+    if (taken) continue;
+
+    const countInCandidateWeek = await getFarmCountForWeek(pg.id, weekStart);
+    if (countInCandidateWeek >= limit) continue;
+
+    return candidate;
   }
 
-  throw new Error("Nessuna data farming disponibile nei prossimi 365 giorni. Che diamine state combinando con queste miniere?");
+  throw new Error("Nessuno slot farming disponibile nei prossimi 365 giorni.");
 }
 
-async function registerFarmDay(characterId) {
-  const farmDate = await getNextAvailableFarmDate(characterId);
-  const createdAt = new Date().toISOString();
+async function registerFarmDay(pg) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const farmDate = await getNextAvailableFarmDate(pg);
+    const createdAt = new Date().toISOString();
 
-  await db.run(
-    `INSERT INTO farm_days (characterId, farmDate, createdAt)
-     VALUES (?, ?, ?)`,
-    characterId,
-    farmDate,
-    createdAt
-  );
+    try {
+      await db.run(
+        `INSERT INTO farm_days (characterId, farmDate, createdAt)
+         VALUES (?, ?, ?)`,
+        pg.id,
+        farmDate,
+        createdAt
+      );
 
-  return farmDate;
+      return farmDate;
+    } catch (error) {
+      if (String(error?.message || "").includes("UNIQUE")) {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error("Impossibile registrare lo slot farming dopo vari tentativi.");
 }
 
 // === SLASH COMMANDS ===
@@ -796,24 +811,23 @@ async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rari
   const totale = dado + livFort;
   const quantita = calcolaRisultato(dado, livFort, rarita);
 
-  const materialToStore = normalizeText(materiale);
-
-  await incrementWeeklyFarmCount(pg.id);
-
-  const farmDateKey = await registerFarmDay(pg.id);
+  const farmDateKey = await registerFarmDay(pg);
   const farmDateDisplay = formatDateKeyItalian(farmDateKey);
-  const commandExecutedAt = nowRome();
+  const farmWeekStart = getWeekStartKeyFromDateKey(farmDateKey);
+
+  const materialToStore = normalizeText(materiale);
 
   if (quantita > 0) {
     await addMaterialToInventory(pg.id, materialToStore, quantita);
   }
 
-  const farmCount = await getWeeklyFarmCount(pg.id);
+  const farmCount = await getFarmCountForWeek(pg.id, farmWeekStart);
   const farmLimit = getProficiencyBonus(pg.level || 1);
 
   const matDisplay = capitalize(materiale);
   const matFullDisplay = formatMaterialNameForEmbed(materiale, tags, mestieri);
   const nomePg = pg.name;
+  const commandExecutedAt = nowRome();
   const v = { pg: nomePg, mat: matDisplay, miniera, q: quantita, ora: commandExecutedAt };
 
   let frase;
@@ -853,10 +867,10 @@ async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rari
         inline: false
       },
       { name: "📅 Giorno Farming Registrato", value: farmDateDisplay, inline: true },
-      { name: "🕒 Comando Eseguito", value: commandExecutedAt, inline: true },
-      { name: "📆 Farm Settimanali", value: `${farmCount} / ${farmLimit}`, inline: true },
+      { name: "📆 Farm Settimana Registrata", value: `${farmCount} / ${farmLimit}`, inline: true },
       { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
-      { name: "🎲 Dado", value: `${dado} + ${livFort} (fortezza) = **${totale}**`, inline: true }
+      { name: "🎲 Dado", value: `${dado} + ${livFort} (fortezza) = **${totale}**`, inline: true },
+      { name: "🕒 Comando Eseguito", value: commandExecutedAt, inline: true }
     )
     .setFooter({ text: `— ${NOME_BOT}, Maestro delle Miniere (e della tua miseria)` });
 
@@ -977,10 +991,11 @@ client.on("interactionCreate", async interaction => {
           {
             name: "📆 Limite Farming",
             value:
-              "Ogni PG può farmare a settimana un numero di volte pari al suo **bonus competenza**.\n" +
+              "Ogni PG può avere al massimo **1 farm registrato per giorno**.\n" +
+              "Ogni PG può avere a settimana un numero di farm registrati pari al suo **bonus competenza**.\n" +
               "I materiali vengono aggiunti subito.\n" +
-              "Ogni farm viene registrato sul primo giorno libero del PG: oggi, domani, dopodomani, e così via.\n" +
-              "Reset automatico del limite settimanale: **lunedì a mezzanotte**.\n" +
+              "Il farm viene registrato sul primo giorno libero che non sfora il limite della sua settimana.\n" +
+              "Quindi se farmi domenica e il prossimo slot utile è lunedì, quel farm conta nella settimana nuova. Bello, vero? Quasi intelligente.\n" +
               "La fortezza non è obbligatoria: se manca, vale **Nessuna fortezza (Lv. 0)**.",
             inline: false
           },
@@ -1021,7 +1036,7 @@ client.on("interactionCreate", async interaction => {
           { name: "👤 Personaggio", value: pg.name, inline: true },
           { name: "⚔️ Livello", value: `${pg.level}`, inline: true },
           { name: "🧠 Competenza", value: `+${limit}`, inline: true },
-          { name: "📆 Farm Settimanali", value: `${count} / ${limit}`, inline: true },
+          { name: "📆 Farm Settimana Corrente", value: `${count} / ${limit}`, inline: true },
           { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
           { name: "🏰 Fortezza", value: `🏰 **${fort.name}** (Lv. ${fort.level})`, inline: false },
           { name: "🧺 Inventario Materiali", value: formatMaterials(materials), inline: false }
@@ -1062,19 +1077,6 @@ client.on("interactionCreate", async interaction => {
       }
 
       const fortezza = getEffectiveFortress(await getFortress(pg.id));
-
-      if (!(await canFarmThisWeek(pg))) {
-        const count = await getWeeklyFarmCount(pg.id);
-        const limit = getProficiencyBonus(pg.level || 1);
-
-        return interaction.reply({
-          content:
-            `⛏️ **${pg.name}** ha già farmato **${count} / ${limit}** volte questa settimana.\n` +
-            `Il limite settimanale è pari al bonus competenza: **+${limit}**.\n` +
-            `Reset: **lunedì a mezzanotte**. Siediti, respira, smetti di molestare le mie miniere.`,
-          ephemeral: true
-        });
-      }
 
       return eseguiFarm(
         interaction,
