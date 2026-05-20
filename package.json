@@ -1,17 +1,9 @@
 {
-  "name": "giacomo-crafting-bot",
+  "name": "westmarch-discord-bots",
   "version": "1.0.0",
-  "description": "Giacomo, il segretario del CC - bot crafting e ricette per Westmarch D&D",
-  "main": "index.js",
-  "type": "module",
+  "private": true,
   "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "discord.js": "^14.14.1",
-    "dotenv": "^16.4.5",
-    "luxon": "^3.4.4",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7"
+    "postinstall": "npm install --prefix westmarch-bot && npm install --prefix bot-miniere",
+    "start": "node westmarch-bot/index.js & node bot-miniere/index.js & wait"
   }
 }
