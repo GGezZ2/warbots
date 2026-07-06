@@ -75,6 +75,48 @@ const CRAFT_RULES = {
   "non comune": { cd: 9, successes: 2, materialRarity: "comuni" },
   raro: { cd: 13, successes: 4, materialRarity: "non_comuni" },
 }
+const CRAFT_SPECIALI_CATEGORIE = [
+  "Bocchette da Vetraio",
+  "Strumento migliorato",
+  "Pergamena magica",
+  "Spartito magico",
+]
+
+const CRAFT_SPECIALI_GRADI = [
+  "Non comune",
+  "Raro",
+  "Molto raro",
+  "Leggendario",
+  "+1",
+  "+2",
+  "+3",
+]
+
+const COSTI_BOCCETTE_VETRAIO = {
+  "non comune": 100,
+  raro: 300,
+  "molto raro": 1000,
+  leggendario: 3000,
+}
+
+const COSTI_STRUMENTI_MIGLIORATI = {
+  "+1": 1000,
+  "+2": 4000,
+  "+3": 15000,
+}
+
+const COSTI_PERGAMENE_SPARTITI = {
+  0: 15,
+  1: 25,
+  2: 150,
+  3: 250,
+  4: 500,
+  5: 1000,
+  6: 5000,
+  7: 7000,
+  8: 15000,
+  9: 50000,
+}
 const GIACOMO_LINES = [
   "Ho fatto il lavoro. So che sembra magia, ma si chiama leggere le istruzioni.",
   "Archiviato. Un altro trionfo della burocrazia contro l'analfabetismo operativo.",
@@ -1061,6 +1103,153 @@ async function executeCombinedCraft({
     )
   return interaction.reply({ embeds: [scheduledEmbed] })
 }
+function buildSpecialCraftData({ categoria, grado, livello, nomePersonalizzato }) {
+  const cat = norm(categoria)
+  const grade = norm(grado)
+  const nome = String(nomePersonalizzato || "").trim()
+
+  if (cat === norm("Bocchette da Vetraio")) {
+    const cost = COSTI_BOCCETTE_VETRAIO[grade]
+
+    if (cost == null) {
+      return {
+        ok: false,
+        reason: "Per le bocchette da Vetraio devi scegliere un grado tra Non comune, Raro, Molto raro o Leggendario.",
+      }
+    }
+
+    const label = grado
+    return {
+      ok: true,
+      itemName: nome || `Bocchette da Vetraio ${label}`,
+      quantity: 3,
+      cost,
+      note: "Produce sempre 3 bocchette. Non consuma materiali né catalizzatori.",
+    }
+  }
+
+  if (cat === norm("Strumento migliorato")) {
+    const cost = COSTI_STRUMENTI_MIGLIORATI[grado]
+
+    if (cost == null) {
+      return {
+        ok: false,
+        reason: "Per gli strumenti migliorati devi scegliere +1, +2 o +3.",
+      }
+    }
+
+    const craftRichiesto =
+      grado === "+1" ? "Craft di rarità non comune"
+      : grado === "+2" ? "Craft di rarità raro"
+      : "Craft di rarità molto raro"
+
+    return {
+      ok: true,
+      itemName: nome || `Strumenti migliorati ${grado}`,
+      quantity: 1,
+      cost,
+      note: `${craftRichiesto}. Il bot non verifica la competenza nello strumento: controllatela voi, perché Giacomo non è vostro padre.`,
+    }
+  }
+
+  if (cat === norm("Pergamena magica") || cat === norm("Spartito magico")) {
+    const spellLevel = safeInteger(livello, 0, 9)
+    const cost = COSTI_PERGAMENE_SPARTITI[spellLevel]
+
+    if (cost == null) {
+      return {
+        ok: false,
+        reason: "Per pergamene e spartiti il livello deve andare da 0 a 9. Usa 0 per Cantrip.",
+      }
+    }
+
+    const tipo = cat === norm("Pergamena magica") ? "Pergamena magica" : "Spartito magico"
+    const livelloLabel = spellLevel === 0 ? "Cantrip" : `Livello ${spellLevel}`
+
+    return {
+      ok: true,
+      itemName: nome || `${tipo} — ${livelloLabel}`,
+      quantity: 1,
+      cost,
+      note:
+        tipo === "Spartito magico"
+          ? "Spartito magico: il livello massimo dipende dal Bonus di Competenza del Musicista. Il bot applica solo costo e inventario."
+          : "Pergamena magica: il bot applica solo costo e inventario.",
+    }
+  }
+
+  return {
+    ok: false,
+    reason: "Categoria di craft speciale non valida.",
+  }
+}
+
+async function executeSpecialCraft(interaction) {
+  const crafterId = extractId(interaction.options.getString("crafter"))
+  const recipientId = extractId(interaction.options.getString("destinatario"))
+
+  const crafter = await getCharacter(crafterId)
+  const recipient = await getCharacter(recipientId)
+
+  if (!crafter) return replyError(interaction, "Crafter non trovato. Cominciamo benissimo.")
+  if (!recipient) return replyError(interaction, "Destinatario non trovato. Dove lo metto, nel vuoto?")
+
+  if (crafter.playerId !== interaction.user.id) {
+    return replyError(interaction, "Puoi usare come crafter solo un tuo PG. La falsificazione la lasciamo allo Scrivano.")
+  }
+
+  const categoria = interaction.options.getString("categoria")
+  const grado = interaction.options.getString("grado") || ""
+  const livello = interaction.options.getInteger("livello")
+  const nomePersonalizzato = interaction.options.getString("nome_personalizzato") || ""
+
+  const data = buildSpecialCraftData({
+    categoria,
+    grado,
+    livello,
+    nomePersonalizzato,
+  })
+
+  if (!data.ok) {
+    return replyError(interaction, data.reason)
+  }
+
+  const charge = await chargeGold(crafter.id, data.cost)
+  if (!charge.ok) return replyError(interaction, charge.reason)
+
+  const display = await addFinishedItem(
+    recipient.id,
+    data.itemName,
+    data.quantity,
+    false,
+  )
+
+  const embed = new EmbedBuilder()
+    .setTitle("🧾 Craft speciale completato")
+    .setDescription(
+      `${pick(GIACOMO_LINES)}\n\n<@${interaction.user.id}>, **${display}** è stato aggiunto all'inventario di **${recipient.name}**.`,
+    )
+    .addFields(
+      { name: "Crafter", value: crafter.name, inline: true },
+      { name: "Destinatario", value: recipient.name, inline: true },
+      { name: "Categoria", value: categoria, inline: true },
+      {
+        name: "Costo",
+        value: `${data.cost} MO (${charge.fromGold} tasca, ${charge.fromBank} banca)`,
+        inline: true,
+      },
+      { name: "Nota", value: data.note, inline: false },
+    )
+    .setColor(0x38bdf8)
+    .setFooter({
+      text: "Giacomo, il segretario del CC — servizi speciali, contabilità ordinaria.",
+    })
+
+  return interaction.reply({
+    content: `<@${interaction.user.id}>`,
+    embeds: [embed],
+  })
+}
 function commandChoices(list) {
   return list.map((x) => ({ name: x, value: x }))
 }
@@ -1069,8 +1258,54 @@ const CRAFT_COMMAND_NAMES = [
   "craft_da_ricetta",
   "craft_combinato",
   "craft_combinato_da_ricetta",
+  "craft_speciale",
 ]
 const commands = [
+    new SlashCommandBuilder()
+    .setName("craft_speciale")
+    .setDescription("Esegue craft speciali e servizi: bocchette, strumenti migliorati, pergamene e spartiti.")
+    .addStringOption((o) =>
+      o
+        .setName("crafter")
+        .setDescription("PG che paga il servizio")
+        .setRequired(true)
+        .setAutocomplete(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("categoria")
+        .setDescription("Tipo di craft speciale")
+        .setRequired(true)
+        .addChoices(...commandChoices(CRAFT_SPECIALI_CATEGORIE)),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("destinatario")
+        .setDescription("PG che riceve l'oggetto o il servizio")
+        .setRequired(true)
+        .setAutocomplete(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("grado")
+        .setDescription("Grado richiesto: per bocchette o strumenti migliorati")
+        .setRequired(false)
+        .addChoices(...commandChoices(CRAFT_SPECIALI_GRADI)),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName("livello")
+        .setDescription("Livello incantesimo per pergamena/spartito. Usa 0 per Cantrip")
+        .setRequired(false)
+        .setMinValue(0)
+        .setMaxValue(9),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("nome_personalizzato")
+        .setDescription("Nome specifico, es. Pergamena di Palla di Fuoco")
+        .setRequired(false),
+    ),
   new SlashCommandBuilder()
     .setName("craft")
     .setDescription(
@@ -1960,6 +2195,9 @@ async function handleCommand(interaction) {
         "Questo comando va usato nella zona crafting. Non ovunque come coriandoli.",
       )
     }
+  }
+    if (interaction.commandName === "craft_speciale") {
+    return executeSpecialCraft(interaction)
   }
   if (interaction.commandName === "craft") {
     return executeCraft({
