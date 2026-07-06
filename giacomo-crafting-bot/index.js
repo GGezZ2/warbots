@@ -85,24 +85,18 @@ const CRAFT_SPECIALI_CATEGORIE = [
 const CRAFT_SPECIALI_GRADI = [
   "Non comune",
   "Raro",
-  "Molto raro",
-  "Leggendario",
   "+1",
   "+2",
-  "+3",
 ]
 
 const COSTI_BOCCETTE_VETRAIO = {
   "non comune": 100,
   raro: 300,
-  "molto raro": 1000,
-  leggendario: 3000,
 }
 
 const COSTI_STRUMENTI_MIGLIORATI = {
   "+1": 1000,
   "+2": 4000,
-  "+3": 15000,
 }
 
 const COSTI_PERGAMENE_SPARTITI = {
@@ -113,9 +107,6 @@ const COSTI_PERGAMENE_SPARTITI = {
   4: 500,
   5: 1000,
   6: 5000,
-  7: 7000,
-  8: 15000,
-  9: 50000,
 }
 const GIACOMO_LINES = [
   "Ho fatto il lavoro. So che sembra magia, ma si chiama leggere le istruzioni.",
@@ -1103,7 +1094,22 @@ async function executeCombinedCraft({
     )
   return interaction.reply({ embeds: [scheduledEmbed] })
 }
-function buildSpecialCraftData({ categoria, grado, livello, nomePersonalizzato }) {
+function spellSpecialRarity(level) {
+  const l = safeInteger(level, 0, 9)
+
+  if (l <= 2) return "Comune"
+  if (l <= 4) return "Non comune"
+  if (l <= 6) return "Raro"
+
+  return null
+}
+
+function buildSpecialCraftData({
+  categoria,
+  grado,
+  livello,
+  nomePersonalizzato,
+}) {
   const cat = norm(categoria)
   const grade = norm(grado)
   const nome = String(nomePersonalizzato || "").trim()
@@ -1114,17 +1120,19 @@ function buildSpecialCraftData({ categoria, grado, livello, nomePersonalizzato }
     if (cost == null) {
       return {
         ok: false,
-        reason: "Per le bocchette da Vetraio devi scegliere un grado tra Non comune, Raro, Molto raro o Leggendario.",
+        reason:
+          "Per le bocchette da Vetraio puoi scegliere solo Non comune o Raro.",
       }
     }
 
-    const label = grado
     return {
       ok: true,
-      itemName: nome || `Bocchette da Vetraio ${label}`,
+      itemName: nome || `Bocchette da Vetraio ${grado}`,
       quantity: 3,
       cost,
-      note: "Produce sempre 3 bocchette. Non consuma materiali né catalizzatori.",
+      rollRarity: grado,
+      note:
+        "Produce sempre 3 bocchette. Non consuma materiali né catalizzatori, ma richiede i normali tiri di craft.",
     }
   }
 
@@ -1134,36 +1142,67 @@ function buildSpecialCraftData({ categoria, grado, livello, nomePersonalizzato }
     if (cost == null) {
       return {
         ok: false,
-        reason: "Per gli strumenti migliorati devi scegliere +1, +2 o +3.",
+        reason:
+          "Per gli strumenti migliorati puoi scegliere solo +1 o +2. Gli strumenti +3 non sono ancora implementati.",
       }
     }
 
-    const craftRichiesto =
-      grado === "+1" ? "Craft di rarità non comune"
-      : grado === "+2" ? "Craft di rarità raro"
-      : "Craft di rarità molto raro"
+    const rollRarity =
+      grado === "+1" ? "Non comune"
+      : grado === "+2" ? "Raro"
+      : null
+
+    if (!rollRarity) {
+      return {
+        ok: false,
+        reason:
+          "Grado strumento non valido. Usa +1 o +2.",
+      }
+    }
 
     return {
       ok: true,
       itemName: nome || `Strumenti migliorati ${grado}`,
       quantity: 1,
       cost,
-      note: `${craftRichiesto}. Il bot non verifica la competenza nello strumento: controllatela voi, perché Giacomo non è vostro padre.`,
+      rollRarity,
+      note: `Craft richiesto: ${rollRarity}. Il bot non verifica la competenza nello specifico strumento.`,
     }
   }
 
   if (cat === norm("Pergamena magica") || cat === norm("Spartito magico")) {
+    if (livello == null) {
+      return {
+        ok: false,
+        reason:
+          "Per pergamene e spartiti devi indicare il livello dell'incantesimo. Usa 0 per Cantrip.",
+      }
+    }
+
     const spellLevel = safeInteger(livello, 0, 9)
     const cost = COSTI_PERGAMENE_SPARTITI[spellLevel]
 
     if (cost == null) {
       return {
         ok: false,
-        reason: "Per pergamene e spartiti il livello deve andare da 0 a 9. Usa 0 per Cantrip.",
+        reason:
+          "Pergamene e spartiti di livello 7, 8 e 9 non sono ancora implementati. Usa un livello da 0 a 6.",
       }
     }
 
-    const tipo = cat === norm("Pergamena magica") ? "Pergamena magica" : "Spartito magico"
+    const rollRarity = spellSpecialRarity(spellLevel)
+
+    if (!rollRarity) {
+      return {
+        ok: false,
+        reason:
+          "Rarità non configurata per questo livello. Usa un livello da 0 a 6.",
+      }
+    }
+
+    const tipo =
+      cat === norm("Pergamena magica") ? "Pergamena magica" : "Spartito magico"
+
     const livelloLabel = spellLevel === 0 ? "Cantrip" : `Livello ${spellLevel}`
 
     return {
@@ -1171,10 +1210,11 @@ function buildSpecialCraftData({ categoria, grado, livello, nomePersonalizzato }
       itemName: nome || `${tipo} — ${livelloLabel}`,
       quantity: 1,
       cost,
+      rollRarity,
       note:
         tipo === "Spartito magico"
-          ? "Spartito magico: il livello massimo dipende dal Bonus di Competenza del Musicista. Il bot applica solo costo e inventario."
-          : "Pergamena magica: il bot applica solo costo e inventario.",
+          ? `Spartito magico di ${livelloLabel}. Rarità di craft: ${rollRarity}. Il livello massimo dipende dal Bonus di Competenza del Musicista.`
+          : `Pergamena magica di ${livelloLabel}. Rarità di craft: ${rollRarity}.`,
     }
   }
 
@@ -1191,17 +1231,43 @@ async function executeSpecialCraft(interaction) {
   const crafter = await getCharacter(crafterId)
   const recipient = await getCharacter(recipientId)
 
-  if (!crafter) return replyError(interaction, "Crafter non trovato. Cominciamo benissimo.")
-  if (!recipient) return replyError(interaction, "Destinatario non trovato. Dove lo metto, nel vuoto?")
+  if (!crafter) {
+    return replyError(
+      interaction,
+      "Crafter non trovato. Cominciamo benissimo.",
+    )
+  }
+
+  if (!recipient) {
+    return replyError(
+      interaction,
+      "Destinatario non trovato. Dove lo metto, nel vuoto?",
+    )
+  }
 
   if (crafter.playerId !== interaction.user.id) {
-    return replyError(interaction, "Puoi usare come crafter solo un tuo PG. La falsificazione la lasciamo allo Scrivano.")
+    return replyError(
+      interaction,
+      "Puoi usare come crafter solo un tuo PG. La falsificazione la lasciamo allo Scrivano.",
+    )
   }
 
   const categoria = interaction.options.getString("categoria")
   const grado = interaction.options.getString("grado") || ""
   const livello = interaction.options.getInteger("livello")
-  const nomePersonalizzato = interaction.options.getString("nome_personalizzato") || ""
+  const nomePersonalizzato =
+    interaction.options.getString("nome_personalizzato") || ""
+  const startDate = interaction.options.getString("data_inizio")
+  const bonusExtra = interaction.options.getInteger("bonus_extra") || 0
+
+  const startDt = parseStartDate(startDate)
+
+  if (!startDt) {
+    return replyError(
+      interaction,
+      "Data non valida. Usa formato `YYYY-MM-DD`, non un appunto lasciato in taverna.",
+    )
+  }
 
   const data = buildSpecialCraftData({
     categoria,
@@ -1214,41 +1280,343 @@ async function executeSpecialCraft(interaction) {
     return replyError(interaction, data.reason)
   }
 
-  const charge = await chargeGold(crafter.id, data.cost)
-  if (!charge.ok) return replyError(interaction, charge.reason)
+  const rules = CRAFT_RULES[norm(data.rollRarity)]
 
-  const display = await addFinishedItem(
-    recipient.id,
-    data.itemName,
-    data.quantity,
-    false,
+  if (!rules) {
+    return replyError(
+      interaction,
+      `Rarità di tiro non configurata: **${data.rollRarity}**.`,
+    )
+  }
+
+  const fortress = await getFortress(crafter.id)
+
+  const rollData = rollCraft(
+    crafter,
+    fortress?.level || 0,
+    data.rollRarity,
+    bonusExtra,
   )
 
-  const embed = new EmbedBuilder()
+  const dueAt = dueAtFor(startDt, rollData.rolls.length)
+
+  const charge = await chargeGold(crafter.id, data.cost)
+
+  if (!charge.ok) return replyError(interaction, charge.reason)
+
+  const baseEmbed = new EmbedBuilder()
     .setTitle("🧾 Craft speciale completato")
     .setDescription(
-      `${pick(GIACOMO_LINES)}\n\n<@${interaction.user.id}>, **${display}** è stato aggiunto all'inventario di **${recipient.name}**.`,
+      `${pick(GIACOMO_LINES)}\n\n<@${interaction.user.id}>, **${data.itemName}** è pronto. Burocrazia speciale, dolore ordinario.`,
     )
     .addFields(
       { name: "Crafter", value: crafter.name, inline: true },
       { name: "Destinatario", value: recipient.name, inline: true },
       { name: "Categoria", value: categoria, inline: true },
       {
+        name: "Oggetto",
+        value: `${data.quantity}x ${data.itemName}`,
+        inline: true,
+      },
+      {
+        name: "Rarità di craft",
+        value: data.rollRarity,
+        inline: true,
+      },
+      {
         name: "Costo",
         value: `${data.cost} MO (${charge.fromGold} tasca, ${charge.fromBank} banca)`,
         inline: true,
       },
-      { name: "Nota", value: data.note, inline: false },
+      {
+        name: "Tiri",
+        value: `CD ${rollData.cd}, successi ${rollData.required}. Completato in **${rollData.rolls.length} giorni**.\n\n${rollsSummary(rollData).slice(0, 900)}`,
+        inline: false,
+      },
+      {
+        name: "Fine craft",
+        value: dueAt.setZone(TIMEZONE).toFormat("dd/LL/yyyy HH:mm"),
+        inline: true,
+      },
+      {
+        name: "Nota speciale",
+        value: data.note,
+        inline: false,
+      },
     )
     .setColor(0x38bdf8)
     .setFooter({
       text: "Giacomo, il segretario del CC — servizi speciali, contabilità ordinaria.",
     })
 
-  return interaction.reply({
-    content: `<@${interaction.user.id}>`,
-    embeds: [embed],
+  const now = DateTime.now().setZone(TIMEZONE)
+
+  if (dueAt <= now) {
+    const display = await addFinishedItem(
+      recipient.id,
+      data.itemName,
+      data.quantity,
+      false,
+    )
+
+    baseEmbed.setDescription(
+      `${pick(GIACOMO_LINES)}\n\n<@${interaction.user.id}>, **${display}** era già pronto ed è stato aggiunto all'inventario di **${recipient.name}**.`,
+    )
+
+    return interaction.reply({
+      content: `<@${interaction.user.id}>`,
+      embeds: [baseEmbed],
+    })
+  }
+
+  await db.run(
+    `INSERT INTO craft_pending (
+      userId,
+      channelId,
+      crafterCharacterId,
+      recipientCharacterId,
+      itemName,
+      quantity,
+      attunement,
+      dueAt,
+      summary,
+      createdAt
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    interaction.user.id,
+    interaction.channelId,
+    crafter.id,
+    recipient.id,
+    data.itemName,
+    data.quantity,
+    0,
+    dueAt.toUTC().toISO(),
+    JSON.stringify(baseEmbed.toJSON()),
+    DateTime.utc().toISO(),
+  )
+
+  const scheduledEmbed = EmbedBuilder.from(baseEmbed)
+    .setTitle("🧾 Craft speciale avviato")
+    .setDescription(
+      `${pick(GIACOMO_LINES)}\n\nCraft speciale registrato. Ti menzionerò il **${dueAt.toFormat("dd/LL/yyyy alle HH:mm")}**. Anche le pratiche speciali, purtroppo, richiedono lavoro.`,
+    )
+
+  return interaction.reply({ embeds: [scheduledEmbed] })
+}
+async function executeSpecialCombinedCraft(interaction) {
+  const primaryCrafterId = extractId(
+    interaction.options.getString("crafter_primario"),
+  )
+  const secondaryCrafterId = extractId(
+    interaction.options.getString("crafter_secondario"),
+  )
+  const recipientId = extractId(interaction.options.getString("destinatario"))
+
+  const primaryCrafter = await getCharacter(primaryCrafterId)
+  const secondaryCrafter = await getCharacter(secondaryCrafterId)
+  const recipient = await getCharacter(recipientId)
+
+  if (!primaryCrafter) {
+    return replyError(
+      interaction,
+      "Crafter primario non trovato. Ottimo inizio, pessima esecuzione.",
+    )
+  }
+
+  if (!secondaryCrafter) {
+    return replyError(
+      interaction,
+      "Crafter secondario non trovato. Collaborazione immaginaria, capisco.",
+    )
+  }
+
+  if (!recipient) {
+    return replyError(
+      interaction,
+      "Destinatario non trovato. Devo consegnarlo all'aria?",
+    )
+  }
+
+  if (primaryCrafter.playerId !== interaction.user.id) {
+    return replyError(
+      interaction,
+      "Il craft speciale combinato deve essere avviato dal proprietario del crafter primario.",
+    )
+  }
+
+  if (primaryCrafter.playerId === secondaryCrafter.playerId) {
+    return replyError(
+      interaction,
+      "Il crafter secondario deve appartenere a un altro utente. Il multitasking non conta come collaborazione.",
+    )
+  }
+
+  const categoria = interaction.options.getString("categoria")
+  const grado = interaction.options.getString("grado") || ""
+  const livello = interaction.options.getInteger("livello")
+  const nomePersonalizzato =
+    interaction.options.getString("nome_personalizzato") || ""
+  const startDate = interaction.options.getString("data_inizio")
+  const bonusPrimary = interaction.options.getInteger("bonus_primario") || 0
+  const bonusSecondary = interaction.options.getInteger("bonus_secondario") || 0
+  const secondaryPayment =
+    interaction.options.getInteger("pagamento_secondario") || 0
+
+  const startDt = parseStartDate(startDate)
+
+  if (!startDt) {
+    return replyError(
+      interaction,
+      "Data non valida. Usa formato `YYYY-MM-DD`, non un appunto lasciato in taverna.",
+    )
+  }
+
+  const data = buildSpecialCraftData({
+    categoria,
+    grado,
+    livello,
+    nomePersonalizzato,
   })
+
+  if (!data.ok) {
+    return replyError(interaction, data.reason)
+  }
+
+  const rules = CRAFT_RULES[norm(data.rollRarity)]
+
+  if (!rules) {
+    return replyError(
+      interaction,
+      `Rarità di tiro non configurata: **${data.rollRarity}**.`,
+    )
+  }
+
+  if (rules.successes < 2) {
+    return replyError(
+      interaction,
+      "Questo craft speciale è di rarità Comune e richiede 1 solo successo: non ha senso dividerlo in combinato.",
+    )
+  }
+
+  const payment = safeInteger(secondaryPayment, 0, 1000000)
+  const totalCharge = data.cost + payment
+
+  const primaryRequired = Math.ceil(rules.successes / 2)
+  const secondaryRequired = rules.successes - primaryRequired
+
+  const primaryFortress = await getFortress(primaryCrafter.id)
+  const secondaryFortress = await getFortress(secondaryCrafter.id)
+
+  const primaryRollData = rollCraft(
+    primaryCrafter,
+    primaryFortress?.level || 0,
+    data.rollRarity,
+    safeInteger(bonusPrimary, 0, 1000),
+    primaryRequired,
+  )
+
+  const secondaryRollData = rollCraft(
+    secondaryCrafter,
+    secondaryFortress?.level || 0,
+    data.rollRarity,
+    safeInteger(bonusSecondary, 0, 1000),
+    secondaryRequired,
+  )
+
+  const completionDays = Math.max(
+    primaryRollData.rolls.length,
+    secondaryRollData.rolls.length,
+  )
+
+  const dueAt = dueAtFor(startDt, completionDays)
+
+  const charge = await chargeGold(primaryCrafter.id, totalCharge)
+
+  if (!charge.ok) return replyError(interaction, charge.reason)
+
+  if (payment > 0) {
+    await addGoldToBank(secondaryCrafter.id, payment)
+  }
+
+  const baseEmbed = combinedCompletionEmbed({
+    userId: interaction.user.id,
+    primaryCrafter,
+    secondaryCrafter,
+    recipient,
+    itemDisplay: data.itemName,
+    quantity: data.quantity,
+    rarita: data.rollRarity,
+    tipologia: categoria,
+    cost: data.cost,
+    totalCharge,
+    charge,
+    payment,
+    primaryRollData,
+    secondaryRollData,
+    dueAt,
+    materialsText: "Nessun materiale o catalizzatore richiesto.",
+    recipeName: data.itemName,
+  })
+    .setTitle("🧾 Craft speciale combinato completato")
+    .addFields({
+      name: "Nota speciale",
+      value: data.note,
+      inline: false,
+    })
+
+  const now = DateTime.now().setZone(TIMEZONE)
+
+  if (dueAt <= now) {
+    const display = await addFinishedItem(
+      recipient.id,
+      data.itemName,
+      data.quantity,
+      false,
+    )
+
+    baseEmbed.setDescription(
+      `${pick(GIACOMO_LINES)}\n\n<@${interaction.user.id}>, **${display}** era già pronto ed è stato aggiunto all'inventario di **${recipient.name}**.`,
+    )
+
+    return interaction.reply({
+      content: `<@${interaction.user.id}>`,
+      embeds: [baseEmbed],
+    })
+  }
+
+  await db.run(
+    `INSERT INTO craft_pending (
+      userId,
+      channelId,
+      crafterCharacterId,
+      recipientCharacterId,
+      itemName,
+      quantity,
+      attunement,
+      dueAt,
+      summary,
+      createdAt
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    interaction.user.id,
+    interaction.channelId,
+    primaryCrafter.id,
+    recipient.id,
+    data.itemName,
+    data.quantity,
+    0,
+    dueAt.toUTC().toISO(),
+    JSON.stringify(baseEmbed.toJSON()),
+    DateTime.utc().toISO(),
+  )
+
+  const scheduledEmbed = EmbedBuilder.from(baseEmbed)
+    .setTitle("🧾 Craft speciale combinato avviato")
+    .setDescription(
+      `${pick(GIACOMO_LINES)}\n\nCraft speciale combinato registrato. Ti menzionerò il **${dueAt.toFormat("dd/LL/yyyy alle HH:mm")}**. Due firme, una pratica, zero pietà.`,
+    )
+
+  return interaction.reply({ embeds: [scheduledEmbed] })
 }
 function commandChoices(list) {
   return list.map((x) => ({ name: x, value: x }))
@@ -1259,15 +1627,18 @@ const CRAFT_COMMAND_NAMES = [
   "craft_combinato",
   "craft_combinato_da_ricetta",
   "craft_speciale",
+  "craft_speciale_combinato",
 ]
 const commands = [
-    new SlashCommandBuilder()
+     new SlashCommandBuilder()
     .setName("craft_speciale")
-    .setDescription("Esegue craft speciali e servizi: bocchette, strumenti migliorati, pergamene e spartiti.")
+    .setDescription(
+      "Esegue craft speciali: bocchette, strumenti migliorati, pergamene e spartiti.",
+    )
     .addStringOption((o) =>
       o
         .setName("crafter")
-        .setDescription("PG che paga il servizio")
+        .setDescription("PG che esegue e paga il craft")
         .setRequired(true)
         .setAutocomplete(true),
     )
@@ -1281,9 +1652,15 @@ const commands = [
     .addStringOption((o) =>
       o
         .setName("destinatario")
-        .setDescription("PG che riceve l'oggetto o il servizio")
+        .setDescription("PG che riceve l'oggetto")
         .setRequired(true)
         .setAutocomplete(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("data_inizio")
+        .setDescription("Data inizio craft: YYYY-MM-DD")
+        .setRequired(true),
     )
     .addStringOption((o) =>
       o
@@ -1298,13 +1675,105 @@ const commands = [
         .setDescription("Livello incantesimo per pergamena/spartito. Usa 0 per Cantrip")
         .setRequired(false)
         .setMinValue(0)
-        .setMaxValue(9),
+        .setMaxValue(6),
     )
     .addStringOption((o) =>
       o
         .setName("nome_personalizzato")
         .setDescription("Nome specifico, es. Pergamena di Palla di Fuoco")
         .setRequired(false),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName("bonus_extra")
+        .setDescription("Bonus extra al tiro: strumenti, maestria o altri bonus")
+        .setRequired(false)
+        .setMinValue(0)
+        .setMaxValue(1000),
+    ),
+    new SlashCommandBuilder()
+    .setName("craft_speciale_combinato")
+    .setDescription(
+      "Esegue un craft speciale collaborativo tra due PG di utenti diversi.",
+    )
+    .addStringOption((o) =>
+      o
+        .setName("crafter_primario")
+        .setDescription("PG che paga il craft speciale")
+        .setRequired(true)
+        .setAutocomplete(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("crafter_secondario")
+        .setDescription("PG collaboratore di un altro utente")
+        .setRequired(true)
+        .setAutocomplete(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("categoria")
+        .setDescription("Tipo di craft speciale")
+        .setRequired(true)
+        .addChoices(...commandChoices(CRAFT_SPECIALI_CATEGORIE)),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("destinatario")
+        .setDescription("PG che riceve l'oggetto")
+        .setRequired(true)
+        .setAutocomplete(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("data_inizio")
+        .setDescription("Data inizio craft: YYYY-MM-DD")
+        .setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("grado")
+        .setDescription("Grado richiesto: per bocchette o strumenti migliorati")
+        .setRequired(false)
+        .addChoices(...commandChoices(CRAFT_SPECIALI_GRADI)),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName("livello")
+        .setDescription("Livello incantesimo per pergamena/spartito. Usa 0 per Cantrip")
+        .setRequired(false)
+        .setMinValue(0)
+        .setMaxValue(6),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("nome_personalizzato")
+        .setDescription("Nome specifico, es. Pergamena di Palla di Fuoco")
+        .setRequired(false),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName("bonus_primario")
+        .setDescription("Bonus extra al tiro del primario")
+        .setRequired(false)
+        .setMinValue(0)
+        .setMaxValue(1000),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName("bonus_secondario")
+        .setDescription("Bonus extra al tiro del secondario")
+        .setRequired(false)
+        .setMinValue(0)
+        .setMaxValue(1000),
+    )
+    .addIntegerOption((o) =>
+      o
+        .setName("pagamento_secondario")
+        .setDescription("Pagamento opzionale al secondario, accreditato in banca")
+        .setRequired(false)
+        .setMinValue(0)
+        .setMaxValue(1000000),
     ),
   new SlashCommandBuilder()
     .setName("craft")
@@ -2198,6 +2667,9 @@ async function handleCommand(interaction) {
   }
     if (interaction.commandName === "craft_speciale") {
     return executeSpecialCraft(interaction)
+  }
+    if (interaction.commandName === "craft_speciale_combinato") {
+    return executeSpecialCombinedCraft(interaction)
   }
   if (interaction.commandName === "craft") {
     return executeCraft({
