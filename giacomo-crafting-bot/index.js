@@ -725,14 +725,14 @@ async function validateNeededMaterials(
       return false
     }
     const meta = findMaterialMetadata(needed.name)
-    if (
-      !materialMatches({
-        meta,
-        requiredRarity: rules.materialRarity,
-        mestiere,
-        requiredTag: needed.tag,
-      })
-    ) {
+if (
+  !materialMatches({
+    meta,
+    requiredRarity: rules.materialRarity,
+    mestiere: "",
+    requiredTag: needed.tag,
+  })
+) {
       await replyError(
         interaction,
         `**${needed.name}** non è compatibile con rarità/mestiere${needed.tag ? `/tag ${needed.tag}` : ""}. Giacomo non falsifica ricevute.`,
@@ -2499,14 +2499,14 @@ async function handleAutocomplete(interaction) {
           CRAFT_RULES[norm(interaction.options.getString("rarita"))]
             ?.materialRarity || ""
       }
-      const filtered = rows.filter((r) =>
-        materialMatches({
-          meta: findMaterialMetadata(r.material),
-          requiredRarity,
-          mestiere,
-          requiredTag,
-        }),
-      )
+const filtered = rows.filter((r) =>
+  materialMatches({
+    meta: findMaterialMetadata(r.material),
+    requiredRarity,
+    mestiere: "",
+    requiredTag,
+  }),
+)
       options = selectMenuOptions(
         filtered.map((r) => `${r.material} x${r.quantity}`),
         focused.value,
