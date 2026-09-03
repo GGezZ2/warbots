@@ -691,8 +691,8 @@ const commands = [
     .setDescription("Mostra i comandi di Grumni. Sì, purtroppo devi leggere."),
 
   new SlashCommandBuilder()
-    .setName("scheda_farming")
-    .setDescription("Mostra scheda farming e materiali di un tuo PG.")
+    .setName("registro_farming")
+    .setDescription("Mostra denaro, farming e materiali di un tuo PG.")
     .addStringOption(o =>
       o.setName("nome_pg")
         .setDescription("Nome del tuo PG")
@@ -938,7 +938,7 @@ client.on("interactionCreate", async interaction => {
 
     const betaCommands = [
       "aiuto_miniere",
-      "scheda_farming",
+      "registro_farming",
       "farm",
       "materiali"
     ];
@@ -974,7 +974,7 @@ client.on("interactionCreate", async interaction => {
             name: "⛏️ Farming",
             value:
               "`/farm nome_pg materiale` — Cerca un materiale\n" +
-              "`/scheda_farming nome_pg` — Vedi farm, fortezza e materiali\n" +
+              "`/registro_farming nome_pg` — Vedi denaro, farm, fortezza e materiali\n" +
               "`/materiali` — Mappa miniere",
             inline: false
           },
@@ -1012,7 +1012,7 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    if (command === "scheda_farming") {
+    if (command === "registro_farming") {
       const nomePg = interaction.options.getString("nome_pg");
       const pg = await getPersonaggioByName(interaction.user.id, nomePg);
 
@@ -1036,6 +1036,9 @@ client.on("interactionCreate", async interaction => {
           { name: "👤 Personaggio", value: pg.name, inline: true },
           { name: "⚔️ Livello", value: `${pg.level}`, inline: true },
           { name: "🧠 Competenza", value: `+${limit}`, inline: true },
+          { name: "👛 Tasca", value: `${pg.gold ?? 0} mo`, inline: true },
+          { name: "🏦 Banca", value: `${pg.bank ?? 0} mo`, inline: true },
+          { name: "🪙 Totale", value: `${(pg.gold ?? 0) + (pg.bank ?? 0)} mo`, inline: true },
           { name: "📆 Farm Settimana Corrente", value: `${count} / ${limit}`, inline: true },
           { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
           { name: "🏰 Fortezza", value: `🏰 **${fort.name}** (Lv. ${fort.level})`, inline: false },
