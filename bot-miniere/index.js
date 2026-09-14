@@ -423,9 +423,24 @@ function findMaterialMetadata(materialName) {
 }
 
 function formatMaterialWithMetadata(row) {
+  if (row.shotName !== null && row.shotName !== undefined) {
+    const tags = row.shotTags ? `${row.shotTags} ` : "";
+
+    const mestieri = row.shotMestieri
+      ? ` [${row.shotMestieri}]`
+      : "";
+
+    const description = row.shotDescription
+      ? ` — ${row.shotDescription}`
+      : "";
+
+    return `${row.quantity}x ${tags}${row.shotName}${mestieri}${description}`;
+  }
+
   const meta = findMaterialMetadata(row.material);
 
   const tags = meta.tags ? `${meta.tags} ` : "";
+
   const mestieri = meta.mestieri.length
     ? ` [${meta.mestieri.map(capitalize).join(", ")}]`
     : "";
@@ -610,7 +625,17 @@ async function getPersonaggioByName(userId, nomePg) {
 
 async function getMaterialsInventory(characterId) {
   return db.all(
-    "SELECT material, quantity FROM materials_inventory WHERE characterId = ? AND quantity > 0 ORDER BY material ASC",
+    `SELECT
+       i.material,
+       i.quantity,
+       s.name AS shotName,
+       s.tags AS shotTags,
+       s.mestieri AS shotMestieri,
+       s.description AS shotDescription
+     FROM materials_inventory i
+     LEFT JOIN shot_materials s ON s.material = i.material
+     WHERE i.characterId = ? AND i.quantity > 0
+     ORDER BY i.material ASC`,
     characterId
   );
 }
@@ -713,10 +738,391 @@ async function registerFarmDay(pg) {
 
   throw new Error("Impossibile registrare lo slot farming dopo vari tentativi.");
 }
+// === MATERIALI SPECIALI E GESTIONE INVENTARIO GM ===
+
+// Catalogo separato: questi materiali NON vengono aggiunti alle miniere.
+// Le quantità restano in materials_inventory, come gli altri materiali.
+await db.exec(`
+  CREATE TABLE IF NOT EXISTS shot_materials (
+    material TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    tags TEXT NOT NULL DEFAULT '',
+    mestieri TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT ''
+  );
+`);
+
+const EXTRA_GM_COMMANDS = [
+  "materiale_shot",
+  "assegna_materiale_shot",
+  "rimuovi_materiale_pg"
+];
+
+const extraCommands = [
+  new SlashCommandBuilder()
+    .setName("materiale_shot")
+    .setDescription("Crea o aggiorna un materiale non farmabile. Solo gm-bot.")
+    .addStringOption(o =>
+      o.setName("nome")
+        .setDescription("Nome del materiale; riusa lo stesso nome per modificarlo")
+        .setRequired(true)
+        .setMaxLength(100)
+    )
+    .addStringOption(o =>
+      o.setName("tags")
+        .setDescription("Emoji o tag; usa - per svuotare")
+        .setMaxLength(100)
+    )
+    .addStringOption(o =>
+      o.setName("mestieri")
+        .setDescription("Mestieri separati da virgola; usa - per svuotare")
+        .setMaxLength(250)
+    )
+    .addStringOption(o =>
+      o.setName("descrizione")
+        .setDescription("Descrizione o provenienza; usa - per svuotare")
+        .setMaxLength(400)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("assegna_materiale_shot")
+    .setDescription("Assegna a un PG un materiale del catalogo shot. Solo gm-bot.")
+    .addUserOption(o =>
+      o.setName("giocatore")
+        .setDescription("Proprietario del personaggio")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Seleziona il personaggio del giocatore")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(o =>
+      o.setName("materiale")
+        .setDescription("Seleziona un materiale da shot")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("quantita")
+        .setDescription("Quantità da aggiungere")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(1000000)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("rimuovi_materiale_pg")
+    .setDescription("Rimuove materiali anche errati dall'inventario. Solo gm-bot.")
+    .addUserOption(o =>
+      o.setName("giocatore")
+        .setDescription("Proprietario del personaggio")
+        .setRequired(true)
+    )
+    .addStringOption(o =>
+      o.setName("nome_pg")
+        .setDescription("Seleziona il personaggio del giocatore")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addStringOption(o =>
+      o.setName("voce")
+        .setDescription("Seleziona la voce reale dell'inventario")
+        .setRequired(true)
+        .setAutocomplete(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("quantita")
+        .setDescription("Quantità da togliere; ometti per eliminare tutta la voce")
+        .setMinValue(1)
+        .setMaxValue(1000000)
+    )
+];
+
+async function getShotMaterial(name) {
+  return db.get(
+    "SELECT * FROM shot_materials WHERE material = ?",
+    normalizeText(name)
+  );
+}
+
+// Gestisce SOLO i tre nuovi comandi.
+// true = interazione gestita, il vecchio handler deve fermarsi.
+async function handleExtraMaterials(interaction) {
+  if (!EXTRA_GM_COMMANDS.includes(interaction.commandName)) return false;
+
+  const autocomplete = interaction.isAutocomplete();
+  if (!autocomplete && !interaction.isChatInputCommand()) return false;
+
+  // Controllo anche sull'autocompletamento degli inventari.
+  if (!hasRole(interaction.member, GM_ROLE_NAME)) {
+    if (autocomplete) {
+      await interaction.respond([]);
+    } else {
+      await interaction.reply({
+        content: `🚫 Serve il ruolo ${GM_ROLE_NAME}.`,
+        ephemeral: true
+      });
+    }
+    return true;
+  }
+
+  const command = interaction.commandName;
+
+  if (autocomplete) {
+    const focused = interaction.options.getFocused(true);
+    const search = normalizeText(focused.value);
+    const playerId = interaction.options.get("giocatore")?.value;
+
+    if (focused.name === "nome_pg") {
+      if (!playerId) {
+        await interaction.respond([]);
+        return true;
+      }
+
+      const pgs = await getPersonaggiUtente(playerId);
+
+      await interaction.respond(
+        pgs
+          .filter(pg => normalizeText(pg.name).includes(search))
+          .slice(0, 25)
+          .map(pg => ({
+            name: pg.name.slice(0, 100),
+            // L'ID evita ambiguità tra nomi simili o uguali.
+            value: String(pg.id)
+          }))
+      );
+      return true;
+    }
+
+    if (focused.name === "materiale") {
+      const rows = await db.all(
+        "SELECT material, name FROM shot_materials ORDER BY name"
+      );
+
+      await interaction.respond(
+        rows
+          .filter(row => normalizeText(row.name).includes(search))
+          .slice(0, 25)
+          .map(row => ({
+            name: row.name.slice(0, 100),
+            value: row.material
+          }))
+      );
+      return true;
+    }
+
+    if (focused.name === "voce") {
+      const pgId = interaction.options.getString("nome_pg");
+      const pg = await db.get(
+        "SELECT id FROM characters WHERE id = ? AND playerId = ?",
+        pgId,
+        String(playerId || "")
+      );
+
+      if (!pg) {
+        await interaction.respond([]);
+        return true;
+      }
+
+      // Nessuna ricerca nelle miniere: include anche errori,
+      // materiali fuori catalogo e voci a quantità zero.
+      const rows = await db.all(
+        `SELECT id, material, quantity
+         FROM materials_inventory
+         WHERE characterId = ?
+         ORDER BY material`,
+        pg.id
+      );
+
+      await interaction.respond(
+        rows
+          .filter(row => normalizeText(row.material).includes(search))
+          .slice(0, 25)
+          .map(row => ({
+            name: `#${row.id} · ${row.quantity}x ${row.material}`.slice(0, 100),
+            value: String(row.id)
+          }))
+      );
+      return true;
+    }
+
+    await interaction.respond([]);
+    return true;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const reply = async content => {
+    await interaction.editReply({
+      content,
+      allowedMentions: { parse: [] }
+    });
+    return true;
+  };
+
+  if (command === "materiale_shot") {
+    const name = interaction.options.getString("nome").trim();
+    const key = normalizeText(name);
+
+    if (!key) return reply("❌ Il nome non può essere vuoto.");
+
+    if (trovaMateriale(caricaMiniere(), name)) {
+      return reply(
+        "❌ Esiste già un materiale farmabile con questo nome. " +
+        "Usa un nome distinto per quello da shot."
+      );
+    }
+
+    const existing = await getShotMaterial(key);
+
+    // Evita di riclassificare accidentalmente vecchie voci errate.
+    if (!existing) {
+      const inventoryNames = await db.all(
+        "SELECT DISTINCT material FROM materials_inventory"
+      );
+
+      if (inventoryNames.some(row => normalizeText(row.material) === key)) {
+        return reply(
+          "❌ Questo nome è già presente negli inventari ma non nel catalogo shot. " +
+          "Scegli un nome diverso, oppure correggi prima le vecchie voci."
+        );
+      }
+    }
+
+    const field = (option, previous = "") => {
+      const value = interaction.options.getString(option);
+      if (value === null) return previous;
+      return value.trim() === "-" ? "" : value.trim();
+    };
+
+    const tags = field("tags", existing?.tags);
+    const mestieri = field("mestieri", existing?.mestieri);
+    const description = field("descrizione", existing?.description);
+
+    await db.run(
+      `INSERT INTO shot_materials
+         (material, name, tags, mestieri, description)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(material) DO UPDATE SET
+         name = excluded.name,
+         tags = excluded.tags,
+         mestieri = excluded.mestieri,
+         description = excluded.description`,
+      key, name, tags, mestieri, description
+    );
+
+    return reply(
+      `✅ Materiale da shot ${existing ? "aggiornato" : "creato"}: ${name}\n` +
+      `Tag: ${tags || "Nessuno"}\n` +
+      `Mestieri: ${mestieri || "Nessuno"}\n` +
+      `Descrizione: ${description || "Nessuna"}\n` +
+      "Non è farmabile."
+    );
+  }
+
+  const player = interaction.options.getUser("giocatore");
+  const pgId = interaction.options.getString("nome_pg");
+  const pg = await db.get(
+    "SELECT id, name FROM characters WHERE id = ? AND playerId = ?",
+    pgId,
+    player.id
+  );
+
+  if (!pg) {
+    return reply(
+      "❌ Seleziona un personaggio dai suggerimenti dopo aver scelto il giocatore."
+    );
+  }
+
+  if (command === "assegna_materiale_shot") {
+    const material = await getShotMaterial(
+      interaction.options.getString("materiale")
+    );
+    const quantity = interaction.options.getInteger("quantita");
+
+    if (!material) {
+      return reply("❌ Crea prima questo materiale con /materiale_shot.");
+    }
+
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+      return reply("❌ Quantità non valida.");
+    }
+
+    await addMaterialToInventory(pg.id, material.material, quantity);
+
+    return reply(`✅ Aggiunti ${quantity}x ${material.name} a ${pg.name}.`);
+  }
+
+  if (command === "rimuovi_materiale_pg") {
+    const rowId = interaction.options.getString("voce");
+    const quantity = interaction.options.getInteger("quantita");
+
+    const row = await db.get(
+      `SELECT id, material, quantity
+       FROM materials_inventory
+       WHERE id = ? AND characterId = ?`,
+      rowId,
+      pg.id
+    );
+
+    if (!row) {
+      return reply(
+        "❌ Voce non trovata: selezionala dai suggerimenti dell'inventario."
+      );
+    }
+
+    if (quantity === null) {
+      const result = await db.run(
+        "DELETE FROM materials_inventory WHERE id = ? AND characterId = ?",
+        row.id,
+        pg.id
+      );
+
+      return reply(result.changes
+        ? `🗑️ Eliminata tutta la voce "${row.material}" da ${pg.name}.`
+        : "⚠️ La voce era già stata rimossa."
+      );
+    }
+
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+      return reply("❌ Quantità non valida.");
+    }
+
+    // Controllo atomico: impedisce quantità negative anche se
+    // due comandi vengono eseguiti contemporaneamente.
+    const result = await db.run(
+      `UPDATE materials_inventory
+       SET quantity = quantity - ?
+       WHERE id = ? AND characterId = ? AND quantity >= ?`,
+      quantity,
+      row.id,
+      pg.id,
+      quantity
+    );
+
+    if (!result.changes) {
+      return reply("❌ Quantità insufficiente oppure voce già rimossa.");
+    }
+
+    await db.run(
+      `DELETE FROM materials_inventory
+       WHERE id = ? AND characterId = ? AND quantity = 0`,
+      row.id,
+      pg.id
+    );
+
+    return reply(`✅ Rimossi ${quantity}x ${row.material} da ${pg.name}.`);
+  }
+
+  return false;
+}
 
 // === SLASH COMMANDS ===
 
 const commands = [
+  ...extraCommands,
   new SlashCommandBuilder()
     .setName("aiuto_miniere")
     .setDescription("Mostra i comandi di Grumni. Sì, purtroppo devi leggere."),
@@ -923,6 +1329,8 @@ client.once("clientReady", () => {
 
 client.on("interactionCreate", async interaction => {
   try {
+    if (await handleExtraMaterials(interaction)) return;
+
     if (interaction.isAutocomplete()) {
       const focused = interaction.options.getFocused(true);
       const miniere = caricaMiniere();
@@ -995,10 +1403,13 @@ client.on("interactionCreate", async interaction => {
       });
     }
 
-    if (command === "aiuto_miniere") {
+       if (command === "aiuto_miniere") {
       const embed = new EmbedBuilder()
         .setTitle(`⛏️ ${NOME_BOT} — Comandi`)
-        .setDescription(`Ascolta bene perché **${NOME_BOT}** non ripete. Mai. Tranne ora, perché Discord mi obbliga a essere leggibile.`)
+        .setDescription(
+          `Ascolta bene perché **${NOME_BOT}** non ripete. Mai. ` +
+          "Tranne ora, perché Discord mi obbliga a essere leggibile."
+        )
         .setColor(0xb8860b)
         .addFields(
           {
@@ -1016,6 +1427,29 @@ client.on("interactionCreate", async interaction => {
               "`/delminiera nome`\n" +
               "`/addmat miniera materiale rarita tags mestieri`\n" +
               "`/delmat miniera materiale`\n" +
+              `Richiede ruolo **${GM_ROLE_NAME}**.`,
+            inline: false
+          },
+          {
+            name: "🎁 Materiali da shot",
+            value:
+              "`/materiale_shot` — Crea o aggiorna un materiale speciale\n" +
+              "`/assegna_materiale_shot` — Assegna un materiale speciale a un PG\n" +
+              "I materiali da shot non sono farmabili.\n" +
+              "Per aggiornare un materiale, riusa lo stesso nome.\n" +
+              "I campi facoltativi omessi mantengono il valore precedente.\n" +
+              "Usa `-` per svuotare tag, mestieri o descrizione.\n" +
+              `Richiede ruolo **${GM_ROLE_NAME}**.`,
+            inline: false
+          },
+          {
+            name: "🧹 Correzione inventari",
+            value:
+              "`/rimuovi_materiale_pg` — Rimuove una voce dall'inventario di un PG\n" +
+              "Seleziona prima il giocatore, poi il personaggio e la voce.\n" +
+              "Funziona anche con materiali errati o assenti dalle miniere.\n" +
+              "Indica una quantità per rimuoverne solo una parte.\n" +
+              "Ometti la quantità per eliminare tutta la voce.\n" +
               `Richiede ruolo **${GM_ROLE_NAME}**.`,
             inline: false
           },
@@ -1038,53 +1472,233 @@ client.on("interactionCreate", async interaction => {
             inline: false
           }
         )
-        .setFooter({ text: `— ${NOME_BOT}, già stanco di spiegare cose ovvie` });
+        .setFooter({
+          text: `— ${NOME_BOT}, già stanco di spiegare cose ovvie`
+        });
 
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({
+        embeds: [embed],
+        ephemeral: true
+      });
     }
-
-    if (command === "registro_farming") {
+       if (command === "registro_farming") {
       const nomePg = interaction.options.getString("nome_pg");
-      const pg = await getPersonaggioByName(interaction.user.id, nomePg);
+
+      // Conferma subito la ricezione del comando.
+      await interaction.deferReply({ ephemeral: false });
+
+      const pg = await getPersonaggioByName(
+        interaction.user.id,
+        nomePg
+      );
 
       if (!pg) {
-        return interaction.reply({
-          content: fmt(pick(FRASI_NO_PG), { name: `<@${interaction.user.id}>` }),
-          ephemeral: true
+        await interaction.editReply({
+          content: fmt(pick(FRASI_NO_PG), {
+            name: `<@${interaction.user.id}>`
+          }),
+          allowedMentions: { parse: [] }
         });
+
+        return;
       }
 
-      const fort = getEffectiveFortress(await getFortress(pg.id));
+      const fort = getEffectiveFortress(
+        await getFortress(pg.id)
+      );
+
       const materials = await getMaterialsInventory(pg.id);
       const limit = getProficiencyBonus(pg.level || 1);
       const count = await getWeeklyFarmCount(pg.id);
-      const materialFields = splitEmbedFieldValue(formatMaterials(materials)).map((value, index) => ({
-        name: index === 0 ? "🧺 Inventario Materiali" : "🧺 Inventario Materiali (continua)",
-        value,
-        inline: false
-      }));
+
+      const normalMaterials = materials.filter(
+        row => row.shotName == null
+      );
+
+      const shotMaterials = materials.filter(
+        row => row.shotName != null
+      );
+
+      const materialFields = [];
+
+      const inventorySections = [
+        [
+          "🧺 Materiali ordinari / fuori catalogo",
+          normalMaterials
+        ],
+        [
+          "🎁 Materiali da shot — non farmabili",
+          shotMaterials
+        ]
+      ];
+
+      for (const [title, rows] of inventorySections) {
+        let chunk = "";
+
+        const lines = rows.length
+          ? rows.map(formatMaterialWithMetadata)
+          : ["Vuoto"];
+
+        for (const line of lines) {
+          if (
+            chunk &&
+            chunk.length + line.length + 1 > 1024
+          ) {
+            materialFields.push({
+              name: title,
+              value: chunk,
+              inline: false
+            });
+
+            chunk = "";
+          }
+
+          const textToAppend = (chunk ? "\n" : "") + line;
+
+          // Divide anche eventuali singole voci troppo lunghe,
+          // senza spezzare le coppie UTF-16 delle emoji.
+          for (const character of textToAppend) {
+            if (chunk.length + character.length > 1024) {
+              materialFields.push({
+                name: title,
+                value: chunk,
+                inline: false
+              });
+
+              chunk = "";
+            }
+
+            chunk += character;
+          }
+        }
+
+        if (chunk) {
+          materialFields.push({
+            name: title,
+            value: chunk,
+            inline: false
+          });
+        }
+      }
+
+      const gold = Number(pg.gold ?? 0);
+      const bank = Number(pg.bank ?? 0);
 
       const embed = new EmbedBuilder()
-        .setTitle(`📋 Scheda Farming — ${pg.name}`)
-        .setDescription("Ecco il tuo curriculum da minatore. Fa già ridere così.")
+        .setTitle(`📋 Registro Farming — ${pg.name}`)
+        .setDescription(
+          "Ecco il tuo curriculum da minatore. Fa già ridere così."
+        )
         .setColor(0x3498db)
         .addFields(
-          { name: "👤 Personaggio", value: pg.name, inline: true },
-          { name: "⚔️ Livello", value: `${pg.level}`, inline: true },
-          { name: "🧠 Competenza", value: `+${limit}`, inline: true },
-          { name: "👛 Tasca", value: `${pg.gold ?? 0} mo`, inline: true },
-          { name: "🏦 Banca", value: `${pg.bank ?? 0} mo`, inline: true },
-          { name: "🪙 Totale", value: `${(pg.gold ?? 0) + (pg.bank ?? 0)} mo`, inline: true },
-          { name: "📆 Farm Settimana Corrente", value: `${count} / ${limit}`, inline: true },
-          { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
-          { name: "🏰 Fortezza", value: `🏰 **${fort.name}** (Lv. ${fort.level})`, inline: false },
-          ...materialFields
+          {
+            name: "👤 Personaggio",
+            value: pg.name,
+            inline: true
+          },
+          {
+            name: "⚔️ Livello",
+            value: `${pg.level}`,
+            inline: true
+          },
+          {
+            name: "🧠 Competenza",
+            value: `+${limit}`,
+            inline: true
+          },
+          {
+            name: "👛 Tasca",
+            value: `${gold} mo`,
+            inline: true
+          },
+          {
+            name: "🏦 Banca",
+            value: `${bank} mo`,
+            inline: true
+          },
+          {
+            name: "🪙 Totale",
+            value: `${gold + bank} mo`,
+            inline: true
+          },
+          {
+            name: "📆 Farm Settimana Corrente",
+            value: `${count} / ${limit}`,
+            inline: true
+          },
+          {
+            name: "🔄 Reset",
+            value: "Lunedì a mezzanotte",
+            inline: true
+          },
+          {
+            name: "🏰 Fortezza",
+            value: `🏰 **${fort.name}** (Lv. ${fort.level})`,
+            inline: false
+          }
         )
-        .setFooter({ text: `— ${NOME_BOT}, contabile della tua fatica inutile` });
+        .setFooter({
+          text: `— ${NOME_BOT}, contabile della tua fatica inutile`
+        });
 
-      return interaction.reply({ embeds: [embed], ephemeral: false });
+      // Calcola la lunghezza complessiva del testo dell'embed.
+      const textLength = builder => {
+        const data = builder.data;
+
+        return (
+          (data.title?.length || 0) +
+          (data.description?.length || 0) +
+          (data.footer?.text?.length || 0) +
+          (data.author?.name?.length || 0) +
+          (data.fields || []).reduce(
+            (sum, field) =>
+              sum + field.name.length + field.value.length,
+            0
+          )
+        );
+      };
+
+      const pages = [];
+      let page = embed;
+
+      for (const field of materialFields) {
+        const fieldCount = page.data.fields?.length || 0;
+
+        const nextLength =
+          textLength(page) +
+          field.name.length +
+          field.value.length;
+
+        if (fieldCount >= 25 || nextLength > 5500) {
+          pages.push(page);
+
+          page = new EmbedBuilder()
+            .setTitle(
+              "📋 Registro Farming — Inventario (continua)"
+            )
+            .setColor(0x3498db);
+        }
+
+        page.addFields(field);
+      }
+
+      pages.push(page);
+
+      await interaction.editReply({
+        embeds: [pages[0]],
+        allowedMentions: { parse: [] }
+      });
+
+      for (const nextPage of pages.slice(1)) {
+        await interaction.followUp({
+          embeds: [nextPage],
+          ephemeral: false,
+          allowedMentions: { parse: [] }
+        });
+      }
+
+      return;
     }
-
     if (command === "farm") {
       const nomePg = interaction.options.getString("nome_pg");
       const materiale = interaction.options.getString("materiale").trim();
@@ -1259,49 +1873,96 @@ client.on("interactionCreate", async interaction => {
       return interaction.reply(`💥 Miniera **${nome}** eliminata! Seppellita meglio della dignità dei minatori.`);
     }
 
-    if (command === "addmat") {
-      const nomeMin = interaction.options.getString("miniera").trim();
-      const mat = interaction.options.getString("materiale").trim().toLowerCase();
+        if (command === "addmat") {
+      const nomeMin = interaction.options
+        .getString("miniera")
+        .trim();
+
+      const mat = interaction.options
+        .getString("materiale")
+        .trim()
+        .toLowerCase();
+
       const rar = interaction.options.getString("rarita");
-      const tags = interaction.options.getString("tags")?.trim() || "";
-      const mestieriRaw = interaction.options.getString("mestieri")?.trim() || "";
+
+      const tags =
+        interaction.options.getString("tags")?.trim() || "";
+
+      const mestieriRaw =
+        interaction.options.getString("mestieri")?.trim() || "";
+
+      if (await getShotMaterial(mat)) {
+        return interaction.reply({
+          content:
+            "❌ Questo nome appartiene a un materiale da shot " +
+            "non farmabile. Usa un nome diverso.",
+          ephemeral: true
+        });
+      }
 
       const miniere = caricaMiniere();
 
       if (!miniere[nomeMin]) {
         return interaction.reply({
-          content: `⚠️ Miniera **${nomeMin}** non esiste. Prima crea il buco, poi ci butti la roba.`,
+          content:
+            `⚠️ Miniera **${nomeMin}** non esiste. ` +
+            "Prima crea il buco, poi ci butti la roba.",
           ephemeral: true
         });
       }
 
-      const alreadyExists = [...(miniere[nomeMin].comuni || []), ...(miniere[nomeMin].non_comuni || [])]
-        .some(m => getNome(m) === normalizeText(mat));
+      const alreadyExists = [
+        ...(miniere[nomeMin].comuni || []),
+        ...(miniere[nomeMin].non_comuni || [])
+      ].some(m => getNome(m) === normalizeText(mat));
 
       if (alreadyExists) {
         return interaction.reply({
-          content: `⚠️ **${capitalize(mat)}** esiste già in **${nomeMin}**. Riciclare va bene, duplicare no.`,
+          content:
+            `⚠️ **${capitalize(mat)}** esiste già in **${nomeMin}**. ` +
+            "Riciclare va bene, duplicare no.",
           ephemeral: true
         });
       }
 
       const mestieri = mestieriRaw
-        ? mestieriRaw.split(",").map(s => s.trim().toLowerCase()).filter(Boolean)
+        ? mestieriRaw
+            .split(",")
+            .map(s => s.trim().toLowerCase())
+            .filter(Boolean)
         : [];
 
       const materialToStore = tags || mestieri.length
-        ? { nome: mat, tags, mestieri }
+        ? {
+            nome: mat,
+            tags,
+            mestieri
+          }
         : mat;
 
       miniere[nomeMin][rar].push(materialToStore);
+
       saveJSON(MINIERE_FILE, miniere);
 
-      const tipo = rar === "comuni" ? "⚪ Comune" : "🟣 Non Comune";
+      const tipo = rar === "comuni"
+        ? "⚪ Comune"
+        : "🟣 Non Comune";
+
       const extra = tags || mestieri.length
-        ? `\nTag: ${tags || "Nessuno"}\nMestieri: ${mestieri.length ? mestieri.map(capitalize).join(", ") : "Nessuno"}`
+        ? (
+            `\nTag: ${tags || "Nessuno"}` +
+            `\nMestieri: ${
+              mestieri.length
+                ? mestieri.map(capitalize).join(", ")
+                : "Nessuno"
+            }`
+          )
         : "";
 
-      return interaction.reply(`✅ **${capitalize(mat)}** (${tipo}) aggiunto a **${nomeMin}**! Grumni approva. Malvolentieri.${extra}`);
+      return interaction.reply(
+        `✅ **${capitalize(mat)}** (${tipo}) aggiunto a **${nomeMin}**! ` +
+        `Grumni approva. Malvolentieri.${extra}`
+      );
     }
 
     if (command === "delmat") {
