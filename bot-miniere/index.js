@@ -438,6 +438,37 @@ function formatMaterials(rows) {
   return rows.map(formatMaterialWithMetadata).join(", ");
 }
 
+function splitEmbedFieldValue(text, maxLength = 1024) {
+  if (text.length <= maxLength) return [text];
+
+  const chunks = [];
+  let chunk = "";
+
+  for (const entry of text.split(", ")) {
+    const next = chunk ? `${chunk}, ${entry}` : entry;
+
+    if (next.length <= maxLength) {
+      chunk = next;
+      continue;
+    }
+
+    if (chunk) chunks.push(chunk);
+
+    // Caso eccezionale: un singolo materiale supera il limite di Discord.
+    if (entry.length > maxLength) {
+      for (let i = 0; i < entry.length; i += maxLength) {
+        chunks.push(entry.slice(i, i + maxLength));
+      }
+      chunk = "";
+    } else {
+      chunk = entry;
+    }
+  }
+
+  if (chunk) chunks.push(chunk);
+  return chunks;
+}
+
 function formatMaterialNameForEmbed(materiale, tags = "", mestieri = []) {
   const tagText = tags ? `${tags} ` : "";
   const mestieriText = mestieri.length
@@ -1027,6 +1058,11 @@ client.on("interactionCreate", async interaction => {
       const materials = await getMaterialsInventory(pg.id);
       const limit = getProficiencyBonus(pg.level || 1);
       const count = await getWeeklyFarmCount(pg.id);
+      const materialFields = splitEmbedFieldValue(formatMaterials(materials)).map((value, index) => ({
+        name: index === 0 ? "🧺 Inventario Materiali" : "🧺 Inventario Materiali (continua)",
+        value,
+        inline: false
+      }));
 
       const embed = new EmbedBuilder()
         .setTitle(`📋 Scheda Farming — ${pg.name}`)
@@ -1042,7 +1078,7 @@ client.on("interactionCreate", async interaction => {
           { name: "📆 Farm Settimana Corrente", value: `${count} / ${limit}`, inline: true },
           { name: "🔄 Reset", value: "Lunedì a mezzanotte", inline: true },
           { name: "🏰 Fortezza", value: `🏰 **${fort.name}** (Lv. ${fort.level})`, inline: false },
-          { name: "🧺 Inventario Materiali", value: formatMaterials(materials), inline: false }
+          ...materialFields
         )
         .setFooter({ text: `— ${NOME_BOT}, contabile della tua fatica inutile` });
 
