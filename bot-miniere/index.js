@@ -395,22 +395,68 @@ function getTags(mat) {
   return String(raw || "").trim();
 }
 
+function formatMaterialRarity(rarity) {
+  switch (normalizeText(rarity)) {
+    case "comuni":
+    case "comune":
+      return "Comune";
+
+    case "non_comuni":
+    case "non_comune":
+    case "non comune":
+      return "Non Comune";
+
+    case "raro":
+      return "Raro";
+
+    case "molto_raro":
+    case "molto raro":
+      return "Molto Raro";
+
+    case "leggendario":
+      return "Leggendario";
+
+    default:
+      return "Rarità non specificata";
+  }
+}
+
 function findMaterialMetadata(materialName) {
   const miniere = caricaMiniere();
   const target = normalizeText(materialName);
 
   for (const dati of Object.values(miniere)) {
-    const comuni = Array.isArray(dati.comuni) ? dati.comuni : [];
-    const nonComuni = Array.isArray(dati.non_comuni) ? dati.non_comuni : [];
-    const nonComuniAlt = Array.isArray(dati.nonComuni) ? dati.nonComuni : [];
+    const groups = [
+      {
+        materials: Array.isArray(dati.comuni)
+          ? dati.comuni
+          : [],
+        rarity: "comune"
+      },
+      {
+        materials: Array.isArray(dati.non_comuni)
+          ? dati.non_comuni
+          : [],
+        rarity: "non_comune"
+      },
+      {
+        materials: Array.isArray(dati.nonComuni)
+          ? dati.nonComuni
+          : [],
+        rarity: "non_comune"
+      }
+    ];
 
-    for (const mat of [...comuni, ...nonComuni, ...nonComuniAlt]) {
-      if (getNome(mat) === target) {
-        return {
-          nome: getNomeDisplay(mat) || String(materialName),
-          tags: getTags(mat),
-          mestieri: getMestieri(mat)
-        };
+    for (const group of groups) {
+      for (const mat of group.materials) {
+        if (getNome(mat) === target) {
+          return {
+            nome: getNomeDisplay(mat) || String(materialName),
+            tags: getTags(mat),
+            mestieri: getMestieri(mat),
+            rarity: group.rarity
+          };
+        }
       }
     }
   }
@@ -418,13 +464,16 @@ function findMaterialMetadata(materialName) {
   return {
     nome: String(materialName || "").trim(),
     tags: "",
-    mestieri: []
+    mestieri: [],
+    rarity: ""
   };
 }
 
 function formatMaterialWithMetadata(row) {
   if (row.shotName !== null && row.shotName !== undefined) {
-    const tags = row.shotTags ? `${row.shotTags} ` : "";
+    const tags = row.shotTags
+      ? `${row.shotTags} `
+      : "";
 
     const mestieri = row.shotMestieri
       ? ` [${row.shotMestieri}]`
@@ -434,20 +483,31 @@ function formatMaterialWithMetadata(row) {
       ? ` — ${row.shotDescription}`
       : "";
 
-    return `${row.quantity}x ${tags}${row.shotName}${mestieri}${description}`;
+    const rarity = formatMaterialRarity(row.shotRarity);
+
+    return (
+      `${row.quantity}x ${tags}${row.shotName}` +
+      ` — ${rarity}${mestieri}${description}`
+    );
   }
 
   const meta = findMaterialMetadata(row.material);
 
-  const tags = meta.tags ? `${meta.tags} ` : "";
+  const tags = meta.tags
+    ? `${meta.tags} `
+    : "";
 
   const mestieri = meta.mestieri.length
     ? ` [${meta.mestieri.map(capitalize).join(", ")}]`
     : "";
 
-  return `${row.quantity}x ${tags}${capitalize(meta.nome || row.material)}${mestieri}`;
-}
+  const rarity = formatMaterialRarity(meta.rarity);
 
+  return (
+    `${row.quantity}x ${tags}${capitalize(meta.nome || row.material)}` +
+    ` — ${rarity}${mestieri}`
+  );
+}
 function formatMaterials(rows) {
   if (!rows.length) return "Vuoto";
   return rows.map(formatMaterialWithMetadata).join(", ");
@@ -631,7 +691,8 @@ async function getMaterialsInventory(characterId) {
        s.name AS shotName,
        s.tags AS shotTags,
        s.mestieri AS shotMestieri,
-       s.description AS shotDescription
+       s.description AS shotDescription,
+       s.rarity AS shotRarity
      FROM materials_inventory i
      LEFT JOIN shot_materials s ON s.material = i.material
      WHERE i.characterId = ? AND i.quantity > 0
@@ -748,9 +809,22 @@ await db.exec(`
     name TEXT NOT NULL,
     tags TEXT NOT NULL DEFAULT '',
     mestieri TEXT NOT NULL DEFAULT '',
-    description TEXT NOT NULL DEFAULT ''
+    description TEXT NOT NULL DEFAULT '',
+    rarity TEXT NOT NULL DEFAULT ''
   );
 `);
+
+// Aggiorna anche i database dove shot_materials esiste già.
+const shotMaterialColumns = await db.all(
+  "PRAGMA table_info(shot_materials)"
+);
+
+if (!shotMaterialColumns.some(column => column.name === "rarity")) {
+  await db.exec(`
+    ALTER TABLE shot_materials
+    ADD COLUMN rarity TEXT NOT NULL DEFAULT '';
+  `);
+}
 
 const EXTRA_GM_COMMANDS = [
   "materiale_shot",
@@ -782,6 +856,18 @@ const extraCommands = [
       o.setName("descrizione")
         .setDescription("Descrizione o provenienza; usa - per svuotare")
         .setMaxLength(400)
+    )
+    .addStringOption(o =>
+      o.setName("rarita")
+        .setDescription("Rarità del materiale; ometti per mantenere quella attuale")
+        .addChoices(
+          { name: "Comune", value: "comune" },
+          { name: "Non Comune", value: "non_comune" },
+          { name: "Raro", value: "raro" },
+          { name: "Molto Raro", value: "molto_raro" },
+          { name: "Leggendario", value: "leggendario" },
+          { name: "Non specificata", value: "non_specificata" }
+        )
     ),
 
   new SlashCommandBuilder()
@@ -1001,26 +1087,40 @@ async function handleExtraMaterials(interaction) {
     const mestieri = field("mestieri", existing?.mestieri);
     const description = field("descrizione", existing?.description);
 
+    const selectedRarity = interaction.options.getString("rarita");
+
+    const rarity = selectedRarity === null
+      ? (existing?.rarity || "")
+      : selectedRarity === "non_specificata"
+        ? ""
+        : selectedRarity;
+
     await db.run(
       `INSERT INTO shot_materials
-         (material, name, tags, mestieri, description)
-       VALUES (?, ?, ?, ?, ?)
+         (material, name, tags, mestieri, description, rarity)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(material) DO UPDATE SET
          name = excluded.name,
          tags = excluded.tags,
          mestieri = excluded.mestieri,
-         description = excluded.description`,
-      key, name, tags, mestieri, description
+         description = excluded.description,
+         rarity = excluded.rarity`,
+      key,
+      name,
+      tags,
+      mestieri,
+      description,
+      rarity
     );
 
     return reply(
       `✅ Materiale da shot ${existing ? "aggiornato" : "creato"}: ${name}\n` +
+      `Rarità: ${formatMaterialRarity(rarity)}\n` +
       `Tag: ${tags || "Nessuno"}\n` +
       `Mestieri: ${mestieri || "Nessuno"}\n` +
       `Descrizione: ${description || "Nessuna"}\n` +
       "Non è farmabile."
     );
-  }
 
   const player = interaction.options.getUser("giocatore");
   const pgId = interaction.options.getString("nome_pg");
@@ -1433,7 +1533,7 @@ client.on("interactionCreate", async interaction => {
           {
             name: "🎁 Materiali da shot",
             value:
-              "`/materiale_shot` — Crea o aggiorna un materiale speciale\n" +
+              "`/materiale_shot` — Crea o aggiorna rarità, tag, mestieri e descrizione di un materiale speciale\n" +
               "`/assegna_materiale_shot` — Assegna un materiale speciale a un PG\n" +
               "I materiali da shot non sono farmabili.\n" +
               "Per aggiornare un materiale, riusa lo stesso nome.\n" +
