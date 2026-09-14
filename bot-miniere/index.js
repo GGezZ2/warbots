@@ -1124,7 +1124,6 @@ async function handleExtraMaterials(interaction) {
   }
 
   const player = interaction.options.getUser("giocatore");
-  const player = interaction.options.getUser("giocatore");
   const pgId = interaction.options.getString("nome_pg");
   const pg = await db.get(
     "SELECT id, name FROM characters WHERE id = ? AND playerId = ?",
