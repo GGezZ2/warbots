@@ -1121,7 +1121,9 @@ async function handleExtraMaterials(interaction) {
       `Descrizione: ${description || "Nessuna"}\n` +
       "Non è farmabile."
     );
+  }
 
+  const player = interaction.options.getUser("giocatore");
   const player = interaction.options.getUser("giocatore");
   const pgId = interaction.options.getString("nome_pg");
   const pg = await db.get(
@@ -2125,4 +2127,3 @@ process.on("uncaughtException", error => {
 });
 
 client.login(TOKEN);
-}
