@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "postinstall": "npm install --prefix westmarch-bot && npm install --prefix bot-miniere && npm install --prefix giacomo-crafting-bot",
-    "start": "node westmarch-bot/index.js & node bot-miniere/index.js & node giacomo-crafting-bot/index.js & wait"
+    "postinstall": "npm install --prefix westmarch-bot && npm install --prefix bot-miniere && npm install --prefix giacomo-crafting-bot && npm install --prefix bot-shot",
+    "start": "node westmarch-bot/index.js & node bot-miniere/index.js & node giacomo-crafting-bot/index.js & node bot-shot/index.js & wait",
+    "register:shot": "node bot-shot/register-commands.js"
   }
 }
