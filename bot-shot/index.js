@@ -23,17 +23,8 @@ const DB_PATH =
 const MASTER_LOG_CHANNEL_ID = process.env.MASTER_LOG_CHANNEL_ID?.trim();
 const MASTER_QUEUE_CHANNEL_ID = process.env.MASTER_QUEUE_CHANNEL_ID?.trim();
 
+const BOT_NAME = "Gilda";
 const GM_ROLE_NAME = "gm-bot";
-const BOT_NAME = "Gasterion";
-
-if (!TOKEN) {
-  console.error("Manca SHOT_TOKEN nelle variabili Railway.");
-  process.exit(1);
-}
-
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
 
 const GRADES = ["C", "C+", "B", "B+", "A", "A+", "S", "S+", "Z"];
 
@@ -51,31 +42,37 @@ const MASTER_REWARDS = {
 
 const LINES = {
   opened: [
-    "La missiva è stata affissa. Chi desidera affrontare l'ignoto può ora iscriversi.",
-    "Gasterion apre le iscrizioni. Il fato prende nota; raramente per gentilezza.",
-    "Le cronache attendono nuovi nomi. Cercate di non farvi ricordare soltanto per la causa della morte."
+    "Ho preparato una pagina nuovissima per questa impresa! Cercate di renderla gloriosa, va bene?",
+    "La missiva è pronta! Oh, che emozione… magari questa volta qualcuno tornerà con un mantello svolazzante e una storia meravigliosa.",
+    "Iscrizioni aperte! Ricordate: l'epicità è importante, ma anche tornare a casa interi è una vittoria."
   ],
   signed: [
-    "Candidatura registrata. La gloria è stata avvisata, ma non ha ancora risposto.",
-    "Il tuo nome entra negli archivi. È un inizio migliore della maggior parte delle leggende.",
-    "Registrato. Che gli dei vi osservino con interesse, o almeno da lontano."
+    "Candidatura registrata! Ho lasciato uno spazietto negli archivi per il vostro momento eroico.",
+    "Segnato tutto! Che bello, un altro nome da scrivere nelle cronache… con calligrafia molto elegante, promesso.",
+    "Perfetto! Il tuo nome è sulla missiva. Adesso manca solo una piccola cosa: fare qualcosa di memorabile."
   ],
   closed: [
-    "Le iscrizioni sono chiuse. Le pagine della cronaca passano ora nelle mani del Master.",
-    "La missiva non accetta più nomi. Il destino, per il momento, ha abbastanza volontari.",
-    "Gasterion chiude l'elenco. L'eroismo, come le locande migliori, spesso richiede pazienza."
-  ],
-  party: [
-    "La compagnia è formata. Che la vostra storia meriti di essere trascritta.",
-    "I nomi sono stati scelti. Ora resta soltanto la piccola formalità di sopravvivere.",
-    "Il party è pronto. Le cronache preferiscono finali gloriosi, ma si adattano."
+    "Le iscrizioni sono chiuse! Ora il Master sceglierà chi accompagnerà questa piccola, adorabile e probabilmente pericolosissima impresa.",
+    "Niente altri nomi per questa volta. Ma non preoccupatevi: le cronache hanno sempre bisogno di nuovi protagonisti!",
+    "Missiva chiusa! Ho contato tutti gli iscritti due volte. Tre, se contiamo l'emozione."
   ],
   finished: [
-    "L'impresa è stata consegnata agli archivi. I sopravvissuti ricevono quanto dovuto.",
-    "La pagina è chiusa, non necessariamente la storia.",
-    "Gasterion certifica l'impresa. Il mondo ricorderà ciò che è accaduto; gli archivi, almeno, sì."
+    "Impresa registrata! Bravissimi, davvero. Ho persino usato l'inchiostro dorato per la prima riga.",
+    "Le cronache sono aggiornate! Che storia meravigliosa… anche le parti in cui siete quasi morti.",
+    "Pagina conclusa e ricompense distribuite! Siete stati eroici, o quantomeno molto determinati."
   ]
 };
+
+if (!TOKEN) {
+  console.error("Manca SHOT_TOKEN nelle variabili Railway.");
+  process.exit(1);
+}
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
+
+let db;
 
 function pick(lines) {
   return lines[Math.floor(Math.random() * lines.length)];
@@ -87,22 +84,20 @@ function now() {
 
 function daysSince(date) {
   if (!date) return null;
-
-  const milliseconds = Date.now() - new Date(date).getTime();
-  return Math.max(0, Math.floor(milliseconds / 86_400_000));
+  return Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 86400000));
 }
 
 function gradeFromLevel(level) {
-  const numericLevel = Number(level || 1);
+  const value = Number(level || 1);
 
-  if (numericLevel <= 2) return "C";
-  if (numericLevel <= 4) return "C+";
-  if (numericLevel <= 6) return "B";
-  if (numericLevel <= 8) return "B+";
-  if (numericLevel <= 10) return "A";
-  if (numericLevel <= 12) return "A+";
-  if (numericLevel <= 14) return "S";
-  if (numericLevel <= 16) return "S+";
+  if (value <= 2) return "C";
+  if (value <= 4) return "C+";
+  if (value <= 6) return "B";
+  if (value <= 8) return "B+";
+  if (value <= 10) return "A";
+  if (value <= 12) return "A+";
+  if (value <= 14) return "S";
+  if (value <= 16) return "S+";
 
   return "Z";
 }
@@ -111,11 +106,11 @@ function gradeDistance(first, second) {
   return Math.abs(GRADES.indexOf(first) - GRADES.indexOf(second));
 }
 
-function isGradeCompatible(characterGrade, shotGrade) {
+function isCompatible(characterGrade, shotGrade) {
   return gradeDistance(characterGrade, shotGrade) <= 2;
 }
 
-function masterRewardInterval(characterCount) {
+function masterInterval(characterCount) {
   if (characterCount >= 3) return 2;
   if (characterCount === 2) return 3;
   return 5;
@@ -135,20 +130,18 @@ function isMaster(interaction) {
   );
 }
 
-async function replyError(interaction, message) {
+async function fail(interaction, message) {
   const payload = {
-    content: `📜 **Gasterion:** ${message}`,
+    content: `📜 **${BOT_NAME}:** ${message}`,
     ephemeral: true
   };
 
-  if (interaction.deferred || interaction.replied) {
+  if (interaction.replied || interaction.deferred) {
     return interaction.followUp(payload);
   }
 
   return interaction.reply(payload);
 }
-
-let db;
 
 async function initDatabase() {
   db = await open({
@@ -232,60 +225,32 @@ async function initDatabase() {
     );
   `);
 
-  console.log(`${BOT_NAME} collegato al database: ${DB_PATH}`);
+  console.log(`${BOT_NAME} collegata a: ${DB_PATH}`);
 }
 
-async function getShot(channelId) {
-  return db.get(
-    `
-      SELECT *
-      FROM wm_shots
-      WHERE threadId = ?
-    `,
-    channelId
-  );
+async function getShot(threadId) {
+  return db.get("SELECT * FROM wm_shots WHERE threadId = ?", threadId);
 }
 
-async function getCharacterByName(playerId, name) {
+async function getPerson(shotId, name) {
   return db.get(
-    `
-      SELECT *
-      FROM characters
-      WHERE playerId = ?
-      AND lower(name) = lower(?)
-    `,
-    playerId,
+    `SELECT * FROM wm_shot_people
+     WHERE shotId = ? AND lower(characterName) = lower(?)`,
+    shotId,
     name
   );
 }
 
-async function getShotPerson(shotId, characterName) {
-  return db.get(
-    `
-      SELECT *
-      FROM wm_shot_people
-      WHERE shotId = ?
-      AND lower(characterName) = lower(?)
-    `,
-    shotId,
-    characterName
-  );
-}
-
-async function getEffectiveParticipants(shotId) {
+async function getParticipants(shotId) {
   return db.all(
-    `
-      SELECT *
-      FROM wm_shot_people
-      WHERE shotId = ?
-      AND status IN ('titolare', 'subentrato')
-      ORDER BY tableNumber ASC, characterName ASC
-    `,
+    `SELECT * FROM wm_shot_people
+     WHERE shotId = ? AND status IN ('titolare', 'subentrato')
+     ORDER BY tableNumber, characterName`,
     shotId
   );
 }
 
-async function ensureQueueMessage() {
+async function updateQueue() {
   if (!MASTER_QUEUE_CHANNEL_ID) return;
 
   const channel = await client.channels
@@ -295,36 +260,32 @@ async function ensureQueueMessage() {
   if (!channel?.isTextBased()) return;
 
   const players = await db.all(`
-    SELECT
-      p.id AS playerId,
-      p.name AS playerName,
-      MAX(wp.playedAt) AS lastPlayedAt
+    SELECT p.id, p.name, MAX(w.playedAt) AS lastPlayed
     FROM players p
-    LEFT JOIN wm_participation wp ON wp.playerId = p.id
+    LEFT JOIN wm_participation w ON w.playerId = p.id
     GROUP BY p.id, p.name
     ORDER BY
-      CASE WHEN MAX(wp.playedAt) IS NULL THEN 0 ELSE 1 END ASC,
-      MAX(wp.playedAt) ASC
+      CASE WHEN MAX(w.playedAt) IS NULL THEN 0 ELSE 1 END,
+      MAX(w.playedAt)
   `);
 
-  const lines = players.map((player, index) => {
-    const wait =
-      player.lastPlayedAt === null
-        ? "nessuna partecipazione registrata"
-        : `${daysSince(player.lastPlayedAt)} giorni dall'ultima shot`;
+  const text =
+    players
+      .map((player, index) => {
+        const wait = player.lastPlayed
+          ? `${daysSince(player.lastPlayed)} giorni dall'ultima shot`
+          : "nessuna partecipazione registrata";
 
-    return `${index + 1}. <@${player.playerId}> — ${wait}`;
-  });
-
-  const description =
-    lines.join("\n").slice(0, 3900) ||
-    "Nessun giocatore è ancora registrato nelle cronache.";
+        return `${index + 1}. <@${player.id}> — ${wait}`;
+      })
+      .join("\n")
+      .slice(0, 3900) || "Nessun player registrato.";
 
   const embed = new EmbedBuilder()
-    .setColor(0x4d6b87)
+    .setColor(0x9f7ac4)
     .setTitle("📜 Coda delle Imprese")
     .setDescription(
-      `${description}\n\n*“Nessuno è stato dimenticato; alcuni sono stati semplicemente rimandati dal destino.”*`
+      `${text}\n\n*“Nessuno è stato dimenticato; alcuni sono stati semplicemente rimandati dal destino.”*`
     )
     .setTimestamp();
 
@@ -342,13 +303,9 @@ async function ensureQueueMessage() {
   }
 }
 
-async function addMasterCredit(masterId) {
+async function grantMasterCredit(masterId) {
   let progress = await db.get(
-    `
-      SELECT *
-      FROM wm_master_progress
-      WHERE masterId = ?
-    `,
+    "SELECT * FROM wm_master_progress WHERE masterId = ?",
     masterId
   );
 
@@ -359,153 +316,135 @@ async function addMasterCredit(masterId) {
   if (queue.length === 0) return;
 
   await db.run(
-    `
-      UPDATE wm_master_progress
-      SET masteredShots = masteredShots + 1
-      WHERE masterId = ?
-    `,
+    `UPDATE wm_master_progress
+     SET masteredShots = masteredShots + 1
+     WHERE masterId = ?`,
     masterId
   );
 
   progress = await db.get(
-    `
-      SELECT *
-      FROM wm_master_progress
-      WHERE masterId = ?
-    `,
+    "SELECT * FROM wm_master_progress WHERE masterId = ?",
     masterId
   );
 
-  const count = Number(progress.masteredShots);
-  const interval = masterRewardInterval(queue.length);
+  const shotNumber = Number(progress.masteredShots);
+  const interval = masterInterval(queue.length);
 
-  const rewardDue = count === 1 || (count - 1) % interval === 0;
-
-  if (!rewardDue) return;
+  if (shotNumber !== 1 && (shotNumber - 1) % interval !== 0) return;
 
   await db.run(
-    `
-      UPDATE wm_master_progress
-      SET pendingRewards = pendingRewards + 1
-      WHERE masterId = ?
-    `,
+    `UPDATE wm_master_progress
+     SET pendingRewards = pendingRewards + 1
+     WHERE masterId = ?`,
     masterId
   );
 
   const master = await client.users.fetch(masterId).catch(() => null);
 
-  if (master) {
-    await master
-      .send(
-        [
-          "🎖️ **Gasterion — Ricompensa Master disponibile**",
-          "Hai raggiunto una nuova soglia di shot masterate.",
-          "Usa `/shot premio_master` per riscattare la ricompensa o rinunciare al turno.",
-          "La gloria è avara; per questo conviene registrarla."
-        ].join("\n")
-      )
-      .catch(() => null);
-  }
-}
-
-async function publishShotLog(shot, outcome, summary, consequences, participants) {
-  if (!MASTER_LOG_CHANNEL_ID) return;
-
-  const channel = await client.channels
-    .fetch(MASTER_LOG_CHANNEL_ID)
-    .catch(() => null);
-
-  if (!channel?.isTextBased()) return;
-
-  const threadUrl = `https://discord.com/channels/${channel.guild.id}/${shot.threadId}`;
-
-  const embed = new EmbedBuilder()
-    .setColor(0x526d82)
-    .setTitle(`⚔️ ${shot.title}`)
-    .setURL(threadUrl)
-    .addFields(
-      {
-        name: "Master",
-        value: `<@${shot.masterId}>`,
-        inline: true
-      },
-      {
-        name: "Esito",
-        value: outcome || "Non specificato",
-        inline: true
-      },
-      {
-        name: "Partecipanti effettivi",
-        value:
-          participants.map(person => person.characterName).join(", ") ||
-          "Nessuno",
-        inline: false
-      },
-      {
-        name: "Resoconto",
-        value: summary || "Nessun resoconto inserito.",
-        inline: false
-      },
-      {
-        name: "Conseguenze",
-        value: consequences || "Nessuna conseguenza registrata.",
-        inline: false
-      }
+  await master
+    ?.send(
+      [
+        "🎖️ **Gilda — Ricompensa Master disponibile**",
+        "Hai raggiunto una nuova soglia di shot masterate.",
+        "Usa `/shot premio_master` per riscattarla o rinunciare al turno.",
+        "Ho preparato persino un nastrino. Metaforico, ma molto carino."
+      ].join("\n")
     )
-    .setTimestamp();
-
-  await channel.send({ embeds: [embed] });
+    .catch(() => null);
 }
 
-async function applyPendingShotMaterials(shotId) {
+async function queueMaterial(shot, rawMaterial, quantity, rawRecipients) {
+  const material = await db.get(
+    `SELECT material, name
+     FROM shot_materials
+     WHERE lower(material) = lower(?) OR lower(name) = lower(?)`,
+    rawMaterial,
+    rawMaterial
+  );
+
+  if (!material) {
+    throw new Error(
+      "materiale non trovato in shot_materials. Crealo prima con /materiale_shot di Grumni."
+    );
+  }
+
+  const participants = await getParticipants(shot.id);
+
+  if (participants.length === 0) {
+    throw new Error(
+      "prima imposta titolari o subentrati: i materiali vanno solo ai partecipanti effettivi."
+    );
+  }
+
+  let recipients = participants;
+
+  if (rawRecipients.trim().toLowerCase() !== "tutti") {
+    const names = rawRecipients
+      .split(",")
+      .map(name => name.trim().toLowerCase())
+      .filter(Boolean);
+
+    recipients = participants.filter(person =>
+      names.includes(person.characterName.toLowerCase())
+    );
+
+    if (recipients.length !== names.length) {
+      throw new Error(
+        "uno o più destinatari non sono titolari o subentrati di questa shot."
+      );
+    }
+  }
+
+  for (const recipient of recipients) {
+    await db.run(
+      `INSERT INTO wm_shot_rewards
+       (shotId, characterId, rewardType, rewardName, quantity, applied, createdAt)
+       VALUES (?, ?, 'materiale_shot', ?, ?, 0, ?)`,
+      shot.id,
+      recipient.characterId,
+      material.material,
+      quantity,
+      now()
+    );
+  }
+
+  return {
+    material: material.name || material.material,
+    recipients
+  };
+}
+
+async function applyMaterials(shotId) {
   const rewards = await db.all(
-    `
-      SELECT *
-      FROM wm_shot_rewards
-      WHERE shotId = ?
-      AND rewardType = 'materiale_shot'
-      AND applied = 0
-    `,
+    `SELECT * FROM wm_shot_rewards
+     WHERE shotId = ? AND applied = 0`,
     shotId
   );
 
   for (const reward of rewards) {
     await db.run(
-      `
-        INSERT INTO materials_inventory (characterId, material, quantity)
-        VALUES (?, ?, ?)
-        ON CONFLICT(characterId, material)
-        DO UPDATE SET quantity = quantity + excluded.quantity
-      `,
+      `INSERT INTO materials_inventory (characterId, material, quantity)
+       VALUES (?, ?, ?)
+       ON CONFLICT(characterId, material)
+       DO UPDATE SET quantity = quantity + excluded.quantity`,
       reward.characterId,
       reward.rewardName,
       reward.quantity
     );
 
     await db.run(
-      `
-        UPDATE wm_shot_rewards
-        SET applied = 1
-        WHERE id = ?
-      `,
+      "UPDATE wm_shot_rewards SET applied = 1 WHERE id = ?",
       reward.id
     );
   }
 }
 
-async function closeShot({
-  interaction,
-  shot,
-  goldReward,
-  outcome,
-  summary,
-  consequences
-}) {
-  const participants = await getEffectiveParticipants(shot.id);
+async function closeShot(shot, gold, outcome, summary, consequences) {
+  const participants = await getParticipants(shot.id);
 
   if (participants.length === 0) {
     throw new Error(
-      "Non risultano titolari o subentrati. Imposta prima i partecipanti effettivi con /shot partecipante."
+      "non risultano titolari o subentrati. Impostali prima di chiudere."
     );
   }
 
@@ -514,22 +453,18 @@ async function closeShot({
   try {
     for (const participant of participants) {
       await db.run(
-        `
-          UPDATE characters
-          SET xp = xp + ?, gold = gold + ?
-          WHERE id = ?
-        `,
+        `UPDATE characters
+         SET xp = xp + ?, gold = gold + ?
+         WHERE id = ?`,
         shot.xpReward,
-        goldReward,
+        gold,
         participant.characterId
       );
 
       await db.run(
-        `
-          INSERT INTO wm_participation
-          (playerId, characterId, shotId, playedAt)
-          VALUES (?, ?, ?, ?)
-        `,
+        `INSERT INTO wm_participation
+         (playerId, characterId, shotId, playedAt)
+         VALUES (?, ?, ?, ?)`,
         participant.playerId,
         participant.characterId,
         shot.id,
@@ -537,30 +472,26 @@ async function closeShot({
       );
     }
 
-    await applyPendingShotMaterials(shot.id);
+    await applyMaterials(shot.id);
 
     await db.run(
-      `
-        UPDATE wm_shots
-        SET status = 'conclusa', closedAt = ?
-        WHERE id = ?
-      `,
+      `UPDATE wm_shots
+       SET status = 'conclusa', closedAt = ?
+       WHERE id = ?`,
       now(),
       shot.id
     );
 
     await db.run(
-      `
-        INSERT INTO wm_shot_logs
-        (shotId, masterId, outcome, summary, consequences, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(shotId)
-        DO UPDATE SET
-          outcome = excluded.outcome,
-          summary = excluded.summary,
-          consequences = excluded.consequences,
-          createdAt = excluded.createdAt
-      `,
+      `INSERT INTO wm_shot_logs
+       (shotId, masterId, outcome, summary, consequences, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(shotId)
+       DO UPDATE SET
+         outcome = excluded.outcome,
+         summary = excluded.summary,
+         consequences = excluded.consequences,
+         createdAt = excluded.createdAt`,
       shot.id,
       shot.masterId,
       outcome,
@@ -575,197 +506,152 @@ async function closeShot({
     throw error;
   }
 
-  await addMasterCredit(shot.masterId);
-  await ensureQueueMessage();
-  await publishShotLog(shot, outcome, summary, consequences, participants);
+  await grantMasterCredit(shot.masterId);
+  await updateQueue();
+
+  if (MASTER_LOG_CHANNEL_ID) {
+    const channel = await client.channels
+      .fetch(MASTER_LOG_CHANNEL_ID)
+      .catch(() => null);
+
+    if (channel?.isTextBased()) {
+      const link = `https://discord.com/channels/${channel.guild.id}/${shot.threadId}`;
+
+      await channel.send({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x9f7ac4)
+            .setTitle(`⚔️ ${shot.title}`)
+            .setURL(link)
+            .addFields(
+              {
+                name: "Master",
+                value: `<@${shot.masterId}>`,
+                inline: true
+              },
+              {
+                name: "Esito",
+                value: outcome,
+                inline: true
+              },
+              {
+                name: "Partecipanti",
+                value: participants.map(p => p.characterName).join(", "),
+                inline: false
+              },
+              {
+                name: "Resoconto",
+                value: summary,
+                inline: false
+              },
+              {
+                name: "Conseguenze",
+                value: consequences || "Nessuna conseguenza registrata.",
+                inline: false
+              }
+            )
+            .setTimestamp()
+        ]
+      });
+    }
+  }
 
   return participants;
 }
 
-async function queueShotMaterial(shot, materialName, quantity, rawRecipients) {
-  const material = await db.get(
-    `
-      SELECT material, name
-      FROM shot_materials
-      WHERE lower(material) = lower(?)
-      OR lower(name) = lower(?)
-    `,
-    materialName,
-    materialName
-  );
-
-  if (!material) {
-    throw new Error(
-      "Questo materiale non esiste nel catalogo shot_materials. Crealo prima con /materiale_shot di Grumni."
-    );
-  }
-
-  const participants = await getEffectiveParticipants(shot.id);
-
-  if (participants.length === 0) {
-    throw new Error(
-      "Prima imposta titolari o subentrati: i materiali vengono assegnati solo ai partecipanti effettivi."
-    );
-  }
-
-  const targetText = rawRecipients.trim().toLowerCase();
-
-  let recipients = participants;
-
-  if (targetText !== "tutti") {
-    const requestedNames = rawRecipients
-      .split(",")
-      .map(name => name.trim().toLowerCase())
-      .filter(Boolean);
-
-    recipients = participants.filter(participant =>
-      requestedNames.includes(participant.characterName.toLowerCase())
-    );
-
-    if (recipients.length !== requestedNames.length) {
-      throw new Error(
-        "Uno o più destinatari non sono titolari/subentrati di questa shot."
-      );
-    }
-  }
-
-  for (const recipient of recipients) {
-    await db.run(
-      `
-        INSERT INTO wm_shot_rewards
-        (shotId, characterId, rewardType, rewardName, quantity, applied, createdAt)
-        VALUES (?, ?, 'materiale_shot', ?, ?, 0, ?)
-      `,
-      shot.id,
-      recipient.characterId,
-      material.material,
-      quantity,
-      now()
-    );
-  }
-
-  return {
-    displayName: material.name || material.material,
-    recipients
-  };
-}
-
-async function suggestParty(shot) {
+async function recommend(shot) {
   const applicants = await db.all(
-    `
-      SELECT
-        person.*,
-        character.level,
-        MAX(participation.playedAt) AS lastPlayedAt
-      FROM wm_shot_people person
-      JOIN characters character ON character.id = person.characterId
-      LEFT JOIN wm_participation participation
-        ON participation.playerId = person.playerId
-      WHERE person.shotId = ?
-      AND person.status = 'iscritto'
-      GROUP BY person.id
-    `,
+    `SELECT person.*, character.level, MAX(play.playedAt) AS lastPlayed
+     FROM wm_shot_people person
+     JOIN characters character ON character.id = person.characterId
+     LEFT JOIN wm_participation play ON play.playerId = person.playerId
+     WHERE person.shotId = ? AND person.status = 'iscritto'
+     GROUP BY person.id`,
     shot.id
   );
 
-  const suggestions = applicants.map(applicant => {
-    const grade = gradeFromLevel(applicant.level);
-    const distance = gradeDistance(grade, shot.grade);
-    const wait = daysSince(applicant.lastPlayedAt);
-    const hasHook = applicant.narrativeHook.trim().length > 0;
-    const waitedThreeWeeks = wait === null || wait >= 21;
+  return applicants
+    .map(person => {
+      const grade = gradeFromLevel(person.level);
+      const distance = gradeDistance(grade, shot.grade);
+      const wait = daysSince(person.lastPlayed);
+      const hook = person.narrativeHook.trim().length > 0;
+      const waitedLong = wait === null || wait >= 21;
 
-    let priorityGroup = 99;
-    let reason = "";
+      let priority = 99;
+      let reason = "grado non compatibile";
 
-    if (hasHook) {
-      priorityGroup = 1;
-      reason = "spunto narrativo dichiarato";
-    } else if (waitedThreeWeeks && distance === 0) {
-      priorityGroup = 2;
-      reason = "oltre tre settimane + grado previsto";
-    } else if (waitedThreeWeeks && distance === 1) {
-      priorityGroup = 3;
-      reason = "oltre tre settimane + grado quasi adeguato";
-    } else if (distance === 0) {
-      priorityGroup = 4;
-      reason = "grado previsto";
-    } else if (distance === 1) {
-      priorityGroup = 5;
-      reason = "grado quasi adeguato";
-    } else if (distance === 2) {
-      priorityGroup = 6;
-      reason = "grado compatibile per completamento";
-    } else {
-      reason = "non compatibile";
-    }
+      if (hook) {
+        priority = 1;
+        reason = "spunto narrativo dichiarato";
+      } else if (waitedLong && distance === 0) {
+        priority = 2;
+        reason = "oltre tre settimane e grado previsto";
+      } else if (waitedLong && distance === 1) {
+        priority = 3;
+        reason = "oltre tre settimane e grado quasi adeguato";
+      } else if (distance === 0) {
+        priority = 4;
+        reason = "grado previsto";
+      } else if (distance === 1) {
+        priority = 5;
+        reason = "grado quasi adeguato";
+      } else if (distance === 2) {
+        priority = 6;
+        reason = "grado compatibile per completamento";
+      }
 
-    return {
-      ...applicant,
-      grade,
-      wait,
-      distance,
-      priorityGroup,
-      reason
-    };
-  });
+      return { ...person, grade, wait, priority, reason };
+    })
+    .sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
 
-  suggestions.sort((first, second) => {
-    if (first.priorityGroup !== second.priorityGroup) {
-      return first.priorityGroup - second.priorityGroup;
-    }
-
-    const firstWait = first.wait === null ? 99999 : first.wait;
-    const secondWait = second.wait === null ? 99999 : second.wait;
-
-    return secondWait - firstWait;
-  });
-
-  return suggestions;
+      return (b.wait ?? 99999) - (a.wait ?? 99999);
+    });
 }
 
 client.on("interactionCreate", async interaction => {
   try {
     if (interaction.isButton()) {
-      if (!interaction.customId.startsWith("gasterion_close:")) return;
+      if (!interaction.customId.startsWith("gilda_close:")) return;
 
       if (!isMaster(interaction)) {
-        return replyError(
+        return fail(
           interaction,
-          "solo chi custodisce le cronache può chiudere un'impresa."
+          "solo un Master può chiudere una cronaca. Io sono gentile, ma le regole sono regole."
         );
       }
 
       const shotId = Number(interaction.customId.split(":")[1]);
 
       const modal = new ModalBuilder()
-        .setCustomId(`gasterion_finish:${shotId}`)
-        .setTitle("Gasterion — Chiusura shot");
+        .setCustomId(`gilda_finish:${shotId}`)
+        .setTitle("Gilda — Chiusura shot");
 
       const gold = new TextInputBuilder()
         .setCustomId("gold")
-        .setLabel("Monete per ogni partecipante")
+        .setLabel("Monete per partecipante")
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setValue("0");
 
       const outcome = new TextInputBuilder()
         .setCustomId("outcome")
-        .setLabel("Esito (successo, parziale, fallimento...)")
+        .setLabel("Esito")
         .setStyle(TextInputStyle.Short)
         .setRequired(true)
         .setValue("Successo");
 
       const summary = new TextInputBuilder()
         .setCustomId("summary")
-        .setLabel("Riassunto staff della shot")
+        .setLabel("Riassunto staff")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(true)
         .setMaxLength(1000);
 
       const consequences = new TextInputBuilder()
         .setCustomId("consequences")
-        .setLabel("Conseguenze o agganci futuri")
+        .setLabel("Conseguenze o seguito")
         .setStyle(TextInputStyle.Paragraph)
         .setRequired(false)
         .setMaxLength(1000);
@@ -781,58 +667,30 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (interaction.isModalSubmit()) {
-      if (!interaction.customId.startsWith("gasterion_finish:")) return;
-
-      if (!isMaster(interaction)) {
-        return replyError(interaction, "non possiedi l'autorità necessaria.");
-      }
+      if (!interaction.customId.startsWith("gilda_finish:")) return;
 
       const shotId = Number(interaction.customId.split(":")[1]);
-
-      const shot = await db.get(
-        `
-          SELECT *
-          FROM wm_shots
-          WHERE id = ?
-        `,
-        shotId
-      );
+      const shot = await db.get("SELECT * FROM wm_shots WHERE id = ?", shotId);
 
       if (!shot || shot.status === "conclusa") {
-        return replyError(
-          interaction,
-          "questa shot non è disponibile per una nuova chiusura."
-        );
+        return fail(interaction, "questa shot risulta già chiusa.");
       }
 
-      const goldReward = Math.max(
-        0,
-        Number(interaction.fields.getTextInputValue("gold")) || 0
-      );
-
-      const outcome = interaction.fields.getTextInputValue("outcome").trim();
-      const summary = interaction.fields.getTextInputValue("summary").trim();
-      const consequences = interaction.fields
-        .getTextInputValue("consequences")
-        .trim();
-
-      const participants = await closeShot({
-        interaction,
+      const participants = await closeShot(
         shot,
-        goldReward,
-        outcome,
-        summary,
-        consequences
-      });
+        Math.max(0, Number(interaction.fields.getTextInputValue("gold")) || 0),
+        interaction.fields.getTextInputValue("outcome").trim(),
+        interaction.fields.getTextInputValue("summary").trim(),
+        interaction.fields.getTextInputValue("consequences").trim()
+      );
 
       return interaction.reply({
         content: [
           `✅ **${BOT_NAME}:** ${pick(LINES.finished)}`,
-          `Partecipanti premiati: ${participants
+          `Premi assegnati a: ${participants
             .map(person => person.characterName)
             .join(", ")}.`,
-          `Ogni partecipante ha ricevuto ${shot.xpReward} XP e ${goldReward} mo.`,
-          "I materiali custom già accodati con `/shot materiale` sono stati assegnati."
+          "Coda, registro e progressione master sono stati aggiornati."
         ].join("\n"),
         ephemeral: true
       });
@@ -841,10 +699,10 @@ client.on("interactionCreate", async interaction => {
     if (!interaction.isChatInputCommand()) return;
     if (interaction.commandName !== "shot") return;
 
-    const subcommand = interaction.options.getSubcommand();
-    const currentShot = await getShot(interaction.channelId);
+    const sub = interaction.options.getSubcommand();
+    const shot = await getShot(interaction.channelId);
 
-    const masterOnly = [
+    const masterCommands = [
       "apri",
       "chiudi_iscrizioni",
       "riapri_iscrizioni",
@@ -858,702 +716,404 @@ client.on("interactionCreate", async interaction => {
       "importa_master"
     ];
 
-    if (masterOnly.includes(subcommand) && !isMaster(interaction)) {
-      return replyError(
+    if (masterCommands.includes(sub) && !isMaster(interaction)) {
+      return fail(
         interaction,
-        "questo capitolo è riservato ai Master e ai custodi degli archivi."
+        "questa pagina è riservata ai Master. Posso farti vedere i margini, però."
       );
     }
 
-    if (subcommand === "apri") {
+    if (sub === "apri") {
       if (!interaction.channel?.isThread()) {
-        return replyError(
+        return fail(
           interaction,
-          "le iscrizioni vanno aperte nel thread della missiva, non nel canale principale."
+          "apri la shot direttamente nel thread della missiva, così le cronache restano ordinate."
         );
       }
 
-      if (currentShot) {
-        return replyError(
-          interaction,
-          "questo thread ospita già una shot registrata."
-        );
-      }
-
-      const grade = interaction.options.getString("grado");
-      const slots = interaction.options.getInteger("posti");
-      const xp = interaction.options.getInteger("xp");
-      const tables = interaction.options.getInteger("tavoli") || 1;
+      if (shot) return fail(interaction, "questo thread ospita già una shot.");
 
       const result = await db.run(
-        `
-          INSERT INTO wm_shots
-          (threadId, title, grade, slotsPerTable, tableCount, xpReward, status, masterId, openedAt)
-          VALUES (?, ?, ?, ?, ?, ?, 'aperta', ?, ?)
-        `,
+        `INSERT INTO wm_shots
+         (threadId, title, grade, slotsPerTable, tableCount, xpReward, masterId, openedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         interaction.channelId,
         interaction.channel.name,
-        grade,
-        slots,
-        tables,
-        xp,
+        interaction.options.getString("grado"),
+        interaction.options.getInteger("posti"),
+        interaction.options.getInteger("tavoli") || 1,
+        interaction.options.getInteger("xp"),
         interaction.user.id,
         now()
       );
 
-      const embed = new EmbedBuilder()
-        .setColor(0x4d6b87)
-        .setTitle(`📜 ${interaction.channel.name}`)
-        .setDescription(pick(LINES.opened))
-        .addFields(
-          {
-            name: "Grado previsto",
-            value: grade,
-            inline: true
-          },
-          {
-            name: "Posti",
-            value: `${slots} per tavolo`,
-            inline: true
-          },
-          {
-            name: "Tavoli",
-            value: String(tables),
-            inline: true
-          },
-          {
-            name: "Esperienza",
-            value: `${xp} XP per partecipante effettivo`,
-            inline: false
-          }
-        )
-        .setFooter({
-          text: "Usa /shot iscriviti per candidare un tuo personaggio."
-        });
-
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`gasterion_close:${result.lastID}`)
-          .setLabel("Chiudi shot")
-          .setStyle(ButtonStyle.Danger)
+      const created = await db.get(
+        "SELECT * FROM wm_shots WHERE id = ?",
+        result.lastID
       );
 
       return interaction.reply({
-        embeds: [embed],
-        components: [row]
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x9f7ac4)
+            .setTitle(`📜 ${created.title}`)
+            .setDescription(pick(LINES.opened))
+            .addFields(
+              { name: "Grado", value: created.grade, inline: true },
+              {
+                name: "Posti",
+                value: `${created.slotsPerTable} per tavolo`,
+                inline: true
+              },
+              {
+                name: "Tavoli",
+                value: String(created.tableCount),
+                inline: true
+              },
+              {
+                name: "Ricompensa XP",
+                value: `${created.xpReward} XP per partecipante effettivo`
+              }
+            )
+        ],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`gilda_close:${created.id}`)
+              .setLabel("Chiudi shot")
+              .setStyle(ButtonStyle.Danger)
+          )
+        ]
       });
     }
 
-    if (!currentShot) {
-      return replyError(
+    if (!shot) {
+      return fail(
         interaction,
-        "Gasterion non trova una shot registrata in questo thread."
+        "non trovo una shot registrata in questo thread."
       );
     }
 
-    if (subcommand === "iscriviti") {
-      if (currentShot.status !== "aperta") {
-        return replyError(
-          interaction,
-          "le iscrizioni non sono attualmente aperte."
-        );
+    if (sub === "iscriviti") {
+      if (shot.status !== "aperta") {
+        return fail(interaction, "le iscrizioni non sono aperte.");
       }
 
-      const characterName = interaction.options.getString("pg");
-      const narrativeHook = interaction.options.getString("spunto") || "";
-
-      const character = await getCharacterByName(
+      const character = await db.get(
+        `SELECT * FROM characters
+         WHERE playerId = ? AND lower(name) = lower(?)`,
         interaction.user.id,
-        characterName
+        interaction.options.getString("pg")
       );
 
       if (!character) {
-        return replyError(
-          interaction,
-          "non trovo questo PG tra i tuoi personaggi registrati."
-        );
+        return fail(interaction, "non trovo questo PG tra le tue schede.");
       }
 
-      const characterGrade = gradeFromLevel(character.level);
+      const grade = gradeFromLevel(character.level);
 
-      if (!isGradeCompatible(characterGrade, currentShot.grade)) {
-        return replyError(
+      if (!isCompatible(grade, shot.grade)) {
+        return fail(
           interaction,
-          `${character.name} è di grado ${characterGrade}, non compatibile con questa shot di grado ${currentShot.grade}.`
-        );
-      }
-
-      const alreadySigned = await db.get(
-        `
-          SELECT *
-          FROM wm_shot_people
-          WHERE shotId = ?
-          AND characterId = ?
-        `,
-        currentShot.id,
-        character.id
-      );
-
-      if (alreadySigned) {
-        return replyError(
-          interaction,
-          "questo personaggio compare già negli archivi della shot."
+          `${character.name} è di grado ${grade}, troppo distante dal grado ${shot.grade} della shot.`
         );
       }
 
       await db.run(
-        `
-          INSERT INTO wm_shot_people
-          (shotId, characterId, playerId, characterName, narrativeHook, createdAt)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `,
-        currentShot.id,
+        `INSERT INTO wm_shot_people
+         (shotId, characterId, playerId, characterName, narrativeHook, createdAt)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        shot.id,
         character.id,
         interaction.user.id,
         character.name,
-        narrativeHook,
+        interaction.options.getString("spunto") || "",
         now()
       );
 
       return interaction.reply({
-        content: `📜 **${BOT_NAME}:** ${pick(LINES.signed)}\n**${character.name}** è iscritt${character.name.endsWith("a") ? "a" : "o"} alla shot.`,
+        content: `📜 **${BOT_NAME}:** ${pick(LINES.signed)}`,
         ephemeral: true
       });
     }
 
-    if (subcommand === "ritirati") {
-      if (currentShot.status !== "aperta") {
-        return replyError(
-          interaction,
-          "le iscrizioni sono chiuse: chiedi a un Master di aggiornare la tua posizione."
-        );
-      }
-
-      const characterName = interaction.options.getString("pg");
-
-      const candidate = await db.get(
-        `
-          SELECT *
-          FROM wm_shot_people
-          WHERE shotId = ?
-          AND playerId = ?
-          AND lower(characterName) = lower(?)
-        `,
-        currentShot.id,
-        interaction.user.id,
-        characterName
-      );
-
-      if (!candidate) {
-        return replyError(
-          interaction,
-          "non trovo una tua iscrizione con questo personaggio."
-        );
-      }
-
+    if (sub === "ritirati") {
       await db.run(
-        `
-          UPDATE wm_shot_people
-          SET status = 'ritirato',
-              note = 'Ritiro volontario del player'
-          WHERE id = ?
-        `,
-        candidate.id
+        `UPDATE wm_shot_people
+         SET status = 'ritirato', note = 'Ritiro volontario'
+         WHERE shotId = ? AND playerId = ? AND lower(characterName) = lower(?)`,
+        shot.id,
+        interaction.user.id,
+        interaction.options.getString("pg")
       );
 
       return interaction.reply({
-        content:
-          "📜 Gasterion ha ritirato il tuo nome dalla missiva. L'archivio non giudica; prende soltanto nota.",
+        content: "📜 Nome ritirato dalla missiva. Le avventure future ti aspettano!",
         ephemeral: true
       });
     }
 
-    if (subcommand === "chiudi_iscrizioni") {
-      await db.run(
-        `
-          UPDATE wm_shots
-          SET status = 'selezione'
-          WHERE id = ?
-        `,
-        currentShot.id
-      );
-
-      return interaction.reply(`📜 **${BOT_NAME}:** ${pick(LINES.closed)}`);
-    }
-
-    if (subcommand === "riapri_iscrizioni") {
-      await db.run(
-        `
-          UPDATE wm_shots
-          SET status = 'aperta'
-          WHERE id = ?
-        `,
-        currentShot.id
-      );
-
-      return interaction.reply(
-        "📜 Gasterion riapre la missiva. Il destino ha nuovamente bisogno di volontari."
-      );
-    }
-
-    if (subcommand === "partecipante") {
-      const characterName = interaction.options.getString("pg");
-      const status = interaction.options.getString("stato");
-      const tableNumber = interaction.options.getInteger("tavolo");
-
-      const person = await getShotPerson(currentShot.id, characterName);
-
-      if (!person) {
-        return replyError(
-          interaction,
-          "questo personaggio non risulta iscritto alla shot."
-        );
-      }
-
-      if (
-        tableNumber &&
-        (tableNumber < 1 || tableNumber > currentShot.tableCount)
-      ) {
-        return replyError(
-          interaction,
-          `questa shot possiede soltanto ${currentShot.tableCount} tavolo/i.`
-        );
-      }
+    if (sub === "chiudi_iscrizioni" || sub === "riapri_iscrizioni") {
+      const status = sub === "chiudi_iscrizioni" ? "selezione" : "aperta";
 
       await db.run(
-        `
-          UPDATE wm_shot_people
-          SET status = ?,
-              tableNumber = COALESCE(?, tableNumber)
-          WHERE id = ?
-        `,
+        "UPDATE wm_shots SET status = ? WHERE id = ?",
         status,
-        tableNumber,
-        person.id
+        shot.id
       );
 
       return interaction.reply(
-        `📜 **${person.characterName}** è ora segnato come **${status}**${
-          tableNumber ? ` nel tavolo ${tableNumber}` : ""
-        }.`
+        sub === "chiudi_iscrizioni"
+          ? `📜 **${BOT_NAME}:** ${pick(LINES.closed)}`
+          : "📜 Iscrizioni riaperte! Nuovi protagonisti possono ancora entrare nella cronaca."
       );
     }
 
-    if (subcommand === "rimuovi") {
-      const characterName = interaction.options.getString("pg");
-      const reason = interaction.options.getString("motivo") || "";
+    if (sub === "partecipante") {
+      const person = await getPerson(
+        shot.id,
+        interaction.options.getString("pg")
+      );
 
-      const person = await getShotPerson(currentShot.id, characterName);
+      if (!person) return fail(interaction, "questo PG non è iscritto.");
 
-      if (!person) {
-        return replyError(
+      const table = interaction.options.getInteger("tavolo");
+
+      if (table && table > shot.tableCount) {
+        return fail(
           interaction,
-          "questo personaggio non compare negli archivi della shot."
+          `questa shot ha soltanto ${shot.tableCount} tavolo/i.`
         );
       }
 
       await db.run(
-        `
-          UPDATE wm_shot_people
-          SET status = 'rimosso',
-              note = ?
-          WHERE id = ?
-        `,
-        reason,
+        `UPDATE wm_shot_people
+         SET status = ?, tableNumber = COALESCE(?, tableNumber)
+         WHERE id = ?`,
+        interaction.options.getString("stato"),
+        table,
         person.id
       );
 
       return interaction.reply(
-        `📜 ${person.characterName} è stato rimosso dalla shot. L'archivio conserva la nota dello staff.`
+        `📜 ${person.characterName} aggiornato correttamente.`
       );
     }
 
-    if (subcommand === "materiale") {
-      if (currentShot.status === "conclusa") {
-        return replyError(
-          interaction,
-          "la shot è già chiusa. Per una correzione usa i comandi staff di Grumni, così resta tutto tracciato."
-        );
-      }
+    if (sub === "rimuovi") {
+      await db.run(
+        `UPDATE wm_shot_people
+         SET status = 'rimosso', note = ?
+         WHERE shotId = ? AND lower(characterName) = lower(?)`,
+        interaction.options.getString("motivo") || "",
+        shot.id,
+        interaction.options.getString("pg")
+      );
 
-      const result = await queueShotMaterial(
-        currentShot,
+      return interaction.reply("📜 Iscrizione rimossa e nota staff salvata.");
+    }
+
+    if (sub === "materiale") {
+      const result = await queueMaterial(
+        shot,
         interaction.options.getString("nome"),
         interaction.options.getInteger("quantita"),
         interaction.options.getString("destinatari")
       );
 
       return interaction.reply({
-        content: [
-          `📦 **${BOT_NAME}:** materiale registrato per la chiusura della shot.`,
-          `**${result.displayName}** ×${interaction.options.getInteger("quantita")}`,
-          `Destinatari: ${result.recipients
-            .map(recipient => recipient.characterName)
-            .join(", ")}.`,
-          "Verrà accreditato assieme alle altre ricompense quando chiuderai la shot."
-        ].join("\n"),
+        content: `📦 **${result.material}** accodato per ${result.recipients
+          .map(person => person.characterName)
+          .join(", ")}. Lo consegnerò alla chiusura, con un fiocchetto metaforico.`,
         ephemeral: true
       });
     }
 
-    if (subcommand === "consiglia") {
-      const suggestions = await suggestParty(currentShot);
-      const totalSlots =
-        currentShot.slotsPerTable * currentShot.tableCount;
+    if (sub === "consiglia") {
+      const people = await recommend(shot);
+      const seats = shot.slotsPerTable * shot.tableCount;
 
-      const lines = suggestions.map((suggestion, index) => {
-        const wait =
-          suggestion.wait === null
-            ? "mai registrato"
-            : `${suggestion.wait} giorni`;
+      const description =
+        people
+          .map((person, index) => {
+            const status =
+              index < seats ? "Titolare suggerito" : "Riserva suggerita";
 
-        const role =
-          index < totalSlots ? "Titolare suggerito" : "Riserva suggerita";
-
-        return [
-          `**${index + 1}. ${suggestion.characterName}** — ${role}`,
-          `Grado ${suggestion.grade}; attesa ${wait}; ${suggestion.reason}.`
-        ].join("\n");
-      });
-
-      const embed = new EmbedBuilder()
-        .setColor(0x4d6b87)
-        .setTitle("📜 Proposta di Gasterion")
-        .setDescription(
-          lines.join("\n\n").slice(0, 4000) ||
-            "Nessun candidato disponibile."
-        )
-        .setFooter({
-          text: "È una proposta: il Master mantiene sempre la decisione finale, soprattutto per composizione e trama."
-        });
+            return `**${index + 1}. ${person.characterName}** — ${status}\nGrado ${person.grade}; attesa ${
+              person.wait === null ? "mai registrato" : `${person.wait} giorni`
+            }; ${person.reason}.`;
+          })
+          .join("\n\n") || "Nessun candidato disponibile.";
 
       return interaction.reply({
-        embeds: [embed],
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0x9f7ac4)
+            .setTitle("📜 Proposta di Gilda")
+            .setDescription(description.slice(0, 4000))
+            .setFooter({
+              text: "La proposta non sostituisce il giudizio del Master su party, trama ed eccezioni."
+            })
+        ],
         ephemeral: true
       });
     }
 
-    if (subcommand === "stato") {
+    if (sub === "stato") {
       const people = await db.all(
-        `
-          SELECT *
-          FROM wm_shot_people
-          WHERE shotId = ?
-          ORDER BY
-            CASE status
-              WHEN 'titolare' THEN 1
-              WHEN 'subentrato' THEN 2
-              WHEN 'riserva' THEN 3
-              ELSE 4
-            END,
-            tableNumber ASC,
-            characterName ASC
-        `,
-        currentShot.id
+        `SELECT * FROM wm_shot_people
+         WHERE shotId = ?
+         ORDER BY tableNumber, characterName`,
+        shot.id
       );
-
-      const rows = people.map(person => {
-        const table = person.tableNumber
-          ? ` — Tavolo ${person.tableNumber}`
-          : "";
-
-        return `• **${person.characterName}** — ${person.status}${table}`;
-      });
-
-      const embed = new EmbedBuilder()
-        .setColor(0x4d6b87)
-        .setTitle(`📜 Stato shot — ${currentShot.title}`)
-        .setDescription(
-          rows.join("\n") || "Nessun nome è stato ancora trascritto."
-        )
-        .addFields(
-          {
-            name: "Grado",
-            value: currentShot.grade,
-            inline: true
-          },
-          {
-            name: "Tavoli",
-            value: String(currentShot.tableCount),
-            inline: true
-          },
-          {
-            name: "Stato",
-            value: currentShot.status,
-            inline: true
-          }
-        );
-
-      return interaction.reply({
-        embeds: [embed],
-        ephemeral: true
-      });
-    }
-
-    if (subcommand === "registro") {
-      const master = interaction.options.getUser("master");
-      const from = interaction.options.getString("da");
-      const to = interaction.options.getString("a");
-
-      const filters = [];
-      const values = [];
-
-      if (master) {
-        filters.push("log.masterId = ?");
-        values.push(master.id);
-      }
-
-      if (from) {
-        filters.push("log.createdAt >= ?");
-        values.push(`${from}T00:00:00.000Z`);
-      }
-
-      if (to) {
-        filters.push("log.createdAt <= ?");
-        values.push(`${to}T23:59:59.999Z`);
-      }
-
-      const where =
-        filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
-
-      const logs = await db.all(
-        `
-          SELECT
-            log.*,
-            shot.title,
-            shot.threadId
-          FROM wm_shot_logs log
-          JOIN wm_shots shot ON shot.id = log.shotId
-          ${where}
-          ORDER BY log.createdAt DESC
-          LIMIT 20
-        `,
-        ...values
-      );
-
-      const entries = logs.map(log => {
-        const date = log.createdAt.slice(0, 10);
-        const link = `https://discord.com/channels/${interaction.guildId}/${log.threadId}`;
-
-        return `• **${date} — ${log.title}** — <@${log.masterId}>\n${link}`;
-      });
 
       return interaction.reply({
         content:
-          entries.join("\n\n") ||
-          "📜 Gasterion non trova cronache che corrispondano a questa ricerca.",
+          people
+            .map(
+              person =>
+                `• **${person.characterName}** — ${person.status}${
+                  person.tableNumber ? ` — Tavolo ${person.tableNumber}` : ""
+                }`
+            )
+            .join("\n") || "Nessuna iscrizione.",
         ephemeral: true
       });
     }
 
-    if (subcommand === "importa_attesa") {
-      const player = interaction.options.getUser("player");
+    if (sub === "importa_attesa") {
       const date = interaction.options.getString("data");
 
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-        return replyError(interaction, "la data deve usare il formato YYYY-MM-DD.");
+        return fail(interaction, "usa una data nel formato YYYY-MM-DD.");
       }
 
       await db.run(
-        `
-          INSERT INTO wm_participation
-          (playerId, characterId, shotId, playedAt)
-          VALUES (?, NULL, NULL, ?)
-        `,
-        player.id,
+        `INSERT INTO wm_participation
+         (playerId, characterId, shotId, playedAt)
+         VALUES (?, NULL, NULL, ?)`,
+        interaction.options.getUser("player").id,
         `${date}T12:00:00.000Z`
       );
 
-      await ensureQueueMessage();
+      await updateQueue();
 
-      return interaction.reply(
-        `📜 Ultima partecipazione di <@${player.id}> impostata al ${date}.`
-      );
+      return interaction.reply("📜 Attesa importata e coda aggiornata.");
     }
 
-    if (subcommand === "importa_master") {
-      const master = interaction.options.getUser("master");
-      const masteredShots = interaction.options.getInteger("shot_masterate");
-
+    if (sub === "importa_master") {
       const queue = interaction.options
         .getString("ordine_pg")
         .split(",")
         .map(name => name.trim())
         .filter(Boolean);
 
-      if (queue.length < 1 || queue.length > 3) {
-        return replyError(
-          interaction,
-          "la rotazione deve contenere da uno a tre personaggi."
-        );
-      }
-
       await db.run(
-        `
-          INSERT INTO wm_master_progress
-          (masterId, masteredShots, characterQueue, pendingRewards)
-          VALUES (?, ?, ?, 0)
-          ON CONFLICT(masterId)
-          DO UPDATE SET
-            masteredShots = excluded.masteredShots,
-            characterQueue = excluded.characterQueue,
-            pendingRewards = 0
-        `,
-        master.id,
-        masteredShots,
+        `INSERT INTO wm_master_progress
+         (masterId, masteredShots, characterQueue, pendingRewards)
+         VALUES (?, ?, ?, 0)
+         ON CONFLICT(masterId)
+         DO UPDATE SET
+           masteredShots = excluded.masteredShots,
+           characterQueue = excluded.characterQueue,
+           pendingRewards = 0`,
+        interaction.options.getUser("master").id,
+        interaction.options.getInteger("shot_masterate"),
         JSON.stringify(queue)
       );
 
-      return interaction.reply(
-        `📜 Progressione di <@${master.id}> importata: ${masteredShots} shot masterate; rotazione ${queue.join(
-          " → "
-        )}.`
-      );
+      return interaction.reply("📜 Progressione Master importata.");
     }
 
-    if (subcommand === "progressione_master") {
+    if (sub === "progressione_master") {
       const master = interaction.options.getUser("master") || interaction.user;
-
       const progress = await db.get(
-        `
-          SELECT *
-          FROM wm_master_progress
-          WHERE masterId = ?
-        `,
+        "SELECT * FROM wm_master_progress WHERE masterId = ?",
         master.id
       );
 
       if (!progress) {
-        return replyError(
-          interaction,
-          "non esiste una progressione importata per questo master."
-        );
+        return fail(interaction, "nessuna progressione registrata.");
       }
 
       const queue = JSON.parse(progress.characterQueue || "[]");
-      const interval = masterRewardInterval(queue.length);
-      const nextThreshold =
-        Number(progress.masteredShots) === 0
-          ? 1
-          : Math.ceil(
-              (Number(progress.masteredShots) + 1) / interval
-            ) *
-              interval +
-            1;
 
       return interaction.reply({
         content: [
-          `🎖️ **Progressione Master — ${master.username}**`,
-          `Shot conteggiate: **${progress.masteredShots}**`,
-          `Rotazione: **${queue.join(" → ")}**`,
-          `Cadenza attuale: una ricompensa ogni **${interval}** shot.`,
-          `Premi pendenti: **${progress.pendingRewards}**`,
-          `Prossima soglia indicativa: **${nextThreshold}ª shot**.`
+          `🎖️ **Progressione di ${master.username}**`,
+          `Shot masterate: ${progress.masteredShots}`,
+          `Rotazione: ${queue.join(" → ")}`,
+          `Premi pendenti: ${progress.pendingRewards}`
         ].join("\n"),
         ephemeral: true
       });
     }
 
-    if (subcommand === "premio_master") {
+    if (sub === "premio_master") {
       const progress = await db.get(
-        `
-          SELECT *
-          FROM wm_master_progress
-          WHERE masterId = ?
-        `,
+        "SELECT * FROM wm_master_progress WHERE masterId = ?",
         interaction.user.id
       );
 
-      if (!progress || Number(progress.pendingRewards) < 1) {
-        return replyError(
-          interaction,
-          "non hai ricompense master pendenti."
-        );
+      if (!progress || progress.pendingRewards < 1) {
+        return fail(interaction, "non hai premi master pendenti.");
       }
 
-      const action = interaction.options.getString("azione");
       const queue = JSON.parse(progress.characterQueue || "[]");
-      const nextCharacterName = queue[0];
+      const due = queue[0];
 
-      if (!nextCharacterName) {
-        return replyError(
-          interaction,
-          "la tua rotazione non contiene personaggi. Reimportala con /shot importa_master."
-        );
-      }
-
-      if (action === "rinuncia") {
+      if (interaction.options.getString("azione") === "rinuncia") {
         queue.push(queue.shift());
 
         await db.run(
-          `
-            UPDATE wm_master_progress
-            SET characterQueue = ?,
-                pendingRewards = pendingRewards - 1
-            WHERE masterId = ?
-          `,
+          `UPDATE wm_master_progress
+           SET characterQueue = ?, pendingRewards = pendingRewards - 1
+           WHERE masterId = ?`,
           JSON.stringify(queue),
           interaction.user.id
         );
 
         await db.run(
-          `
-            INSERT INTO wm_master_reward_log
-            (masterId, shotNumber, characterName, status, createdAt)
-            VALUES (?, ?, ?, 'rinunciata', ?)
-          `,
+          `INSERT INTO wm_master_reward_log
+           (masterId, shotNumber, characterName, status, createdAt)
+           VALUES (?, ?, ?, 'rinunciata', ?)`,
           interaction.user.id,
           progress.masteredShots,
-          nextCharacterName,
+          due,
           now()
         );
 
         return interaction.reply({
-          content: `📜 Turno di **${nextCharacterName}** rinunciato. Gasterion fa avanzare la rotazione senza giudicare. Troppo apertamente, almeno.`,
+          content: `📜 Turno di ${due} rinunciato. La rotazione avanza con molta dignità.`,
           ephemeral: true
         });
       }
 
-      const selectedName = interaction.options.getString("pg");
+      const selected = interaction.options.getString("pg");
 
-      if (!selectedName) {
-        return replyError(
+      if (!selected || selected.toLowerCase() !== due.toLowerCase()) {
+        return fail(
           interaction,
-          `per riscattare devi indicare il PG. Il turno attuale appartiene a **${nextCharacterName}**.`
+          `in questo turno può ricevere la ricompensa soltanto ${due}.`
         );
       }
 
-      if (selectedName.toLowerCase() !== nextCharacterName.toLowerCase()) {
-        return replyError(
-          interaction,
-          `questa ricompensa spetta a **${nextCharacterName}** secondo la rotazione.`
-        );
-      }
-
-      const character = await getCharacterByName(
+      const character = await db.get(
+        `SELECT * FROM characters
+         WHERE playerId = ? AND lower(name) = lower(?)`,
         interaction.user.id,
-        selectedName
+        selected
       );
 
-      if (!character) {
-        return replyError(
-          interaction,
-          "non trovo questo PG tra i tuoi personaggi registrati."
-        );
-      }
+      if (!character) return fail(interaction, "PG non trovato.");
 
-      const grade = gradeFromLevel(character.level);
-      const reward = MASTER_REWARDS[grade];
+      const reward = MASTER_REWARDS[gradeFromLevel(character.level)];
 
       await db.exec("BEGIN TRANSACTION");
 
       try {
         await db.run(
-          `
-            UPDATE characters
-            SET xp = xp + ?, gold = gold + ?
-            WHERE id = ?
-          `,
+          "UPDATE characters SET xp = xp + ?, gold = gold + ? WHERE id = ?",
           reward.xp,
           reward.gold,
           character.id
@@ -1562,22 +1122,17 @@ client.on("interactionCreate", async interaction => {
         queue.push(queue.shift());
 
         await db.run(
-          `
-            UPDATE wm_master_progress
-            SET characterQueue = ?,
-                pendingRewards = pendingRewards - 1
-            WHERE masterId = ?
-          `,
+          `UPDATE wm_master_progress
+           SET characterQueue = ?, pendingRewards = pendingRewards - 1
+           WHERE masterId = ?`,
           JSON.stringify(queue),
           interaction.user.id
         );
 
         await db.run(
-          `
-            INSERT INTO wm_master_reward_log
-            (masterId, shotNumber, characterId, characterName, status, createdAt)
-            VALUES (?, ?, ?, ?, 'riscossa', ?)
-          `,
+          `INSERT INTO wm_master_reward_log
+           (masterId, shotNumber, characterId, characterName, status, createdAt)
+           VALUES (?, ?, ?, ?, 'riscossa', ?)`,
           interaction.user.id,
           progress.masteredShots,
           character.id,
@@ -1592,22 +1147,13 @@ client.on("interactionCreate", async interaction => {
       }
 
       return interaction.reply({
-        content: [
-          "🎖️ **Ricompensa Master riscossa**",
-          `**${character.name}** riceve una ricompensa equivalente a una shot di grado **${grade}**:`,
-          `**${reward.xp} XP** e **${reward.gold} mo**.`,
-          "Gasterion aggiorna la cronaca. La gloria, stavolta, ha firmato."
-        ].join("\n"),
+        content: `🎖️ ${character.name} riceve ${reward.xp} XP e ${reward.gold} mo. Ho scritto tutto con un sacco di cuoricini professionali.`,
         ephemeral: true
       });
     }
   } catch (error) {
     console.error(error);
-
-    return replyError(
-      interaction,
-      `un errore ha macchiato le cronache: ${error.message}`
-    );
+    return fail(interaction, `ho trovato un problema negli archivi: ${error.message}`);
   }
 });
 
@@ -1616,11 +1162,11 @@ await initDatabase();
 client.once("ready", async () => {
   console.log(`${BOT_NAME} è online come ${client.user.tag}.`);
 
-  client.user.setActivity("a custodire le imprese | /shot", {
+  client.user.setActivity("a rendere epiche le imprese | /shot", {
     type: 0
   });
 
-  await ensureQueueMessage();
+  await updateQueue();
 });
 
 client.login(TOKEN);
