@@ -980,6 +980,68 @@ client.on("interactionCreate", async interaction => {
         ephemeral: true
       });
     }
+        if (sub === "registro") {
+      const master = interaction.options.getUser("master");
+      const from = interaction.options.getString("da");
+      const to = interaction.options.getString("a");
+
+      const filters = [];
+      const values = [];
+
+      if (master) {
+        filters.push("log.masterId = ?");
+        values.push(master.id);
+      }
+
+      if (from) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+          return fail(interaction, "la data iniziale deve usare il formato YYYY-MM-DD.");
+        }
+
+        filters.push("log.createdAt >= ?");
+        values.push(`${from}T00:00:00.000Z`);
+      }
+
+      if (to) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+          return fail(interaction, "la data finale deve usare il formato YYYY-MM-DD.");
+        }
+
+        filters.push("log.createdAt <= ?");
+        values.push(`${to}T23:59:59.999Z`);
+      }
+
+      const where = filters.length
+        ? `WHERE ${filters.join(" AND ")}`
+        : "";
+
+      const logs = await db.all(
+        `SELECT log.*, shot.title, shot.threadId
+         FROM wm_shot_logs log
+         JOIN wm_shots shot ON shot.id = log.shotId
+         ${where}
+         ORDER BY log.createdAt DESC
+         LIMIT 20`,
+        ...values
+      );
+
+      const entries = logs.map(log => {
+        const link = `https://discord.com/channels/${interaction.guildId}/${log.threadId}`;
+
+        return [
+          `• **${log.createdAt.slice(0, 10)} — ${log.title}**`,
+          `Master: <@${log.masterId}>`,
+          `[Apri thread della shot](${link})`
+        ].join("\n");
+      });
+
+      return interaction.reply({
+        content:
+          entries.join("\n\n") ||
+          "📜 Non ho trovato imprese che corrispondano a questa ricerca.",
+        ephemeral: true
+      });
+    }
 
     if (sub === "importa_attesa") {
       const date = interaction.options.getString("data");
