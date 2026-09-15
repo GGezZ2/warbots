@@ -59,8 +59,32 @@ const shotCommand = new SlashCommandBuilder()
           .setMinValue(1)
           .setMaxValue(10)
       )
+      .addStringOption(option =>
+        option
+          .setName("data")
+          .setDescription("Data della shot nel formato YYYY-MM-DD")
+          .setRequired(true)
+          .setMinLength(10)
+          .setMaxLength(10)
+      )
+      .addStringOption(option =>
+        option
+          .setName("fascia")
+          .setDescription("Fascia oraria della shot")
+          .setRequired(true)
+          .addChoices(
+            { name: "Pomeriggio", value: "pomeriggio" },
+            { name: "Sera", value: "sera" }
+          )
+      )
+      .addStringOption(option =>
+        option
+          .setName("sinossi")
+          .setDescription("Breve obiettivo della shot")
+          .setRequired(true)
+          .setMaxLength(800)
+      )
   )
-
   .addSubcommand(subcommand =>
     subcommand
       .setName("chiudi_iscrizioni")
@@ -134,6 +158,19 @@ const shotCommand = new SlashCommandBuilder()
           .setRequired(false)
           .setMinValue(1)
           .setMaxValue(10)
+      )
+            .addBooleanOption(option =>
+        option
+          .setName("forza")
+          .setDescription("Ignora un conflitto con una shot simultanea")
+          .setRequired(false)
+      )
+      .addStringOption(option =>
+        option
+          .setName("motivo_override")
+          .setDescription("Motivo staff obbligatorio se usi forza")
+          .setRequired(false)
+          .setMaxLength(500)
       )
   )
 
