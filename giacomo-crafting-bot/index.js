@@ -285,6 +285,7 @@ async function initDB() {
   await db.exec(
     ` CREATE TABLE IF NOT EXISTS players ( id TEXT PRIMARY KEY, name TEXT ); CREATE TABLE IF NOT EXISTS characters ( id INTEGER PRIMARY KEY AUTOINCREMENT, playerId TEXT NOT NULL, name TEXT NOT NULL, xp INTEGER NOT NULL DEFAULT 0, gold INTEGER NOT NULL DEFAULT 0, bank INTEGER NOT NULL DEFAULT 0, level INTEGER NOT NULL DEFAULT 1, FOREIGN KEY (playerId) REFERENCES players(id) ); CREATE TABLE IF NOT EXISTS inventory ( id INTEGER PRIMARY KEY AUTOINCREMENT, characterId INTEGER NOT NULL, item TEXT NOT NULL, FOREIGN KEY (characterId) REFERENCES characters(id) ); CREATE TABLE IF NOT EXISTS attunements ( id INTEGER PRIMARY KEY AUTOINCREMENT, characterId INTEGER NOT NULL, item TEXT NOT NULL, FOREIGN KEY (characterId) REFERENCES characters(id) ); CREATE TABLE IF NOT EXISTS materials_inventory ( id INTEGER PRIMARY KEY AUTOINCREMENT, characterId INTEGER NOT NULL, material TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, UNIQUE(characterId, material), FOREIGN KEY (characterId) REFERENCES characters(id) ); CREATE TABLE IF NOT EXISTS fortresses ( characterId INTEGER PRIMARY KEY, name TEXT NOT NULL, level INTEGER NOT NULL DEFAULT 0, FOREIGN KEY (characterId) REFERENCES characters(id) ); CREATE TABLE IF NOT EXISTS recipes ( id INTEGER PRIMARY KEY AUTOINCREMENT, nomeOggetto TEXT NOT NULL UNIQUE, tipologiaOggetto TEXT NOT NULL, specificaTipologia TEXT NOT NULL DEFAULT '', sintonia INTEGER NOT NULL DEFAULT 0, rarita TEXT NOT NULL, mestiere TEXT NOT NULL, catalizzatore1 TEXT NOT NULL, catalizzatore2 TEXT NOT NULL DEFAULT 'No', materialeTag1 TEXT NOT NULL DEFAULT '', materialeTag2 TEXT NOT NULL DEFAULT '', effettoOggetto TEXT NOT NULL DEFAULT '', createdBy TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL ); CREATE TABLE IF NOT EXISTS craft_pending ( id INTEGER PRIMARY KEY AUTOINCREMENT, userId TEXT NOT NULL, channelId TEXT NOT NULL, crafterCharacterId INTEGER NOT NULL, recipientCharacterId INTEGER NOT NULL, itemName TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 1, attunement INTEGER NOT NULL DEFAULT 0, dueAt TEXT NOT NULL, summary TEXT NOT NULL, createdAt TEXT NOT NULL, completedAt TEXT ); `,
   )
+  await initReforgingDB()
   console.log(`SQLite Giacomo collegato a: ${DB_PATH}`)
   console.log(`File miniere/tag usato: ${MINIERE_FILE}`)
 }
@@ -1618,10 +1619,349 @@ async function executeSpecialCombinedCraft(interaction) {
 
   return interaction.reply({ embeds: [scheduledEmbed] })
 }
+// RIFORGIATURA: approvazione CC persistente, riferita a una singola copia.
+// Rarità, mestieri originali, potenza e catalizzatori sono verificati dal CC
+// nel ticket: il vecchio inventario contiene soltanto il nome dell'oggetto.
+// Non si modifica la ricetta condivisa e non si crea una seconda copia.
+const REFORGE_SUCCESSES = { "non comune": 1, raro: 2 }
+const REFORGE_COMMAND_NAMES = [
+  "autorizza_riforgiatura", "riforgia", "stato_riforgiatura", "revoca_riforgiatura",
+]
+let checkingReforges = false
+
+async function initReforgingDB() {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS craft_reforges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guildId TEXT NOT NULL,
+      inventoryId INTEGER NOT NULL,
+      ownerCharacterId INTEGER NOT NULL,
+      crafterCharacterId INTEGER NOT NULL,
+      crafterUserId TEXT NOT NULL,
+      itemName TEXT NOT NULL,
+      rarity TEXT NOT NULL,
+      originalJobs TEXT NOT NULL,
+      job TEXT NOT NULL,
+      modification TEXT NOT NULL,
+      ticket TEXT NOT NULL,
+      material TEXT NOT NULL DEFAULT '',
+      cost INTEGER NOT NULL CHECK(cost >= 0),
+      bonus INTEGER NOT NULL DEFAULT 0,
+      approvedBy TEXT NOT NULL,
+      approvedAt TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'approved'
+        CHECK(status IN ('approved', 'pending', 'completed', 'revoked')),
+      startDate TEXT,
+      dueAt TEXT,
+      rollData TEXT,
+      chargeData TEXT,
+      channelId TEXT,
+      completedAt TEXT,
+      notifiedAt TEXT,
+      lastError TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS craft_reforges_active_item
+      ON craft_reforges(inventoryId) WHERE status IN ('approved', 'pending');
+    CREATE INDEX IF NOT EXISTS craft_reforges_due
+      ON craft_reforges(status, dueAt);
+  `)
+}
+
+// Una connessione dedicata impedisce che altri handler entrino nella transazione.
+async function reforgeTransaction(action) {
+  const tx = await open({ filename: DB_PATH, driver: sqlite3.Database })
+  try {
+    await tx.exec("PRAGMA busy_timeout = 5000")
+    await tx.exec("BEGIN IMMEDIATE")
+    try {
+      const result = await action(tx)
+      await tx.exec("COMMIT")
+      return result
+    } catch (err) {
+      await tx.exec("ROLLBACK")
+      throw err
+    }
+  } finally {
+    await tx.close()
+  }
+}
+
+function reforgeText(value, max = 100) {
+  return String(value || "").trim().slice(0, max)
+}
+
+function reforgeEmbed(row) {
+  const labels = {
+    approved: "Autorizzata — da avviare", pending: "In lavorazione",
+    completed: "Completata", revoked: "Autorizzazione revocata",
+  }
+  const embed = new EmbedBuilder()
+    .setTitle(`🔨 Riforgiatura #${row.id} — ${labels[row.status]}`)
+    .setColor(row.status === "completed" ? 0x22c55e : 0xf59e0b)
+    .addFields(
+      { name: "Oggetto originale", value: reforgeText(row.itemName, 1000) },
+      { name: "Modifica approvata", value: row.modification },
+      { name: "Rarità / Mestiere", value: `${row.rarity} / ${row.job}`, inline: true },
+      { name: "Regole", value: `CD ${CRAFT_RULES[norm(row.rarity)].cd} — ${REFORGE_SUCCESSES[norm(row.rarity)]} successi`, inline: true },
+      { name: "Crafter / Proprietario", value: `PG #${row.crafterCharacterId} / PG #${row.ownerCharacterId}`, inline: true },
+      { name: "Materiale", value: row.material ? `1x ${row.material}` : "Nessuno", inline: true },
+      { name: "Costo approvato dal CC", value: `${row.cost} MO`, inline: true },
+      { name: "Bonus extra approvato", value: `+${row.bonus}`, inline: true },
+      { name: "Ticket", value: row.ticket },
+    )
+    .setFooter({ text: "Catalizzatori invariati. Modifica della singola copia; ricetta e sintonia conservate." })
+  if (row.rollData) {
+    const rolls = JSON.parse(row.rollData)
+    embed.addFields({ name: "Tiri giornalieri", value: rollsSummary(rolls).slice(0, 1000) })
+  }
+  if (row.dueAt) {
+    embed.addFields({ name: "Fine riforgiatura", value: DateTime.fromISO(row.dueAt).setZone(TIMEZONE).toFormat("dd/LL/yyyy HH:mm") })
+  }
+  if (row.lastError) embed.addFields({ name: "Da verificare con il CC", value: row.lastError.slice(0, 1000) })
+  return embed
+}
+
+async function validateReforgeItem(tx, row) {
+  const item = await tx.get("SELECT * FROM inventory WHERE id = ?", row.inventoryId)
+  if (!item || item.characterId !== row.ownerCharacterId || item.item !== row.itemName) {
+    throw new Error("L'oggetto originale è stato spostato, rinominato o rimosso: il CC deve verificare l'inventario.")
+  }
+  return item
+}
+
+async function authorizeReforge(interaction) {
+  const opts = interaction.options
+  const crafterId = extractId(opts.getString("crafter"))
+  const ownerId = extractId(opts.getString("proprietario"))
+  const inventoryId = extractId(opts.getString("oggetto"))
+  const rarity = opts.getString("rarita")
+  const originalJobs = [opts.getString("mestiere_originale"), opts.getString("secondo_mestiere_originale")]
+    .filter(Boolean).map((job) => reforgeText(job))
+  const job = reforgeText(opts.getString("mestiere_usato") || originalJobs[0])
+  const modification = reforgeText(opts.getString("modifica"), 1000)
+  const ticket = reforgeText(opts.getString("ticket"), 200)
+  const cost = opts.getInteger("costo_mo")
+  const bonus = opts.getInteger("bonus_extra") || 0
+  const material = reforgeText(stripQty(opts.getString("materiale") || ""))
+  if (!REFORGE_SUCCESSES[norm(rarity)]) throw new Error("La riforgiatura è prevista per Non comune e Raro.")
+  if (!job || !originalJobs.some((original) => same(original, job))) {
+    throw new Error("Il mestiere deve coincidere con uno dei mestieri originali, anche per un oggetto collaborativo.")
+  }
+  if (!modification || !Number.isInteger(cost) || cost < 0) throw new Error("Indica modifica e costo approvati, anche 0 MO.")
+  const ticketMatch = ticket.match(/^https:\/\/(?:www\.)?discord\.com\/channels\/(\d+)\/\d+(?:\/\d+)?$/)
+  if (!ticketMatch || ticketMatch[1] !== interaction.guildId) throw new Error("Inserisci il link Discord del ticket o di un suo messaggio, in questo server.")
+  const row = await reforgeTransaction(async (tx) => {
+    const crafter = await tx.get("SELECT * FROM characters WHERE id = ?", crafterId)
+    const owner = await tx.get("SELECT * FROM characters WHERE id = ?", ownerId)
+    const item = await tx.get("SELECT * FROM inventory WHERE id = ? AND characterId = ?", inventoryId, ownerId)
+    if (!crafter || !owner || !item) throw new Error("Seleziona crafter, proprietario e un oggetto del suo inventario.")
+    // L'inventario legacy rappresenta i lotti come 'Nx Nome': non identificarli
+    // con una singola copia, per non applicare la modifica a tutto il lotto.
+    const stack = item.item.match(/^\s*(\d+)\s*x\s+/i)
+    if (stack && Number(stack[1]) !== 1) throw new Error("Separa prima una singola copia dal lotto nell'inventario, poi autorizza la riforgiatura.")
+    const active = await tx.get("SELECT id FROM craft_reforges WHERE inventoryId = ? AND status IN ('approved', 'pending')", inventoryId)
+    if (active) throw new Error(`Questo oggetto ha già la riforgiatura #${active.id} autorizzata o in corso.`)
+    if (material) {
+      const mat = await tx.get("SELECT quantity FROM materials_inventory WHERE characterId = ? AND lower(material) = lower(?)", crafterId, material)
+      if (!mat || mat.quantity < 1) throw new Error("Il materiale facoltativo deve essere nell'inventario del crafter.")
+    }
+    const result = await tx.run(`INSERT INTO craft_reforges
+      (guildId, inventoryId, ownerCharacterId, crafterCharacterId, crafterUserId,
+       itemName, rarity, originalJobs, job, modification, ticket, material, cost,
+       bonus, approvedBy, approvedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      interaction.guildId, inventoryId, ownerId, crafterId, crafter.playerId,
+      item.item, rarity, JSON.stringify(originalJobs), job, modification, ticket,
+      material, cost, bonus, interaction.user.id, DateTime.utc().toISO())
+    return tx.get("SELECT * FROM craft_reforges WHERE id = ?", result.lastID)
+  })
+  return interaction.editReply({
+    content: `🗂️ **Giacomo:** Autorizzazione #${row.id} registrata. Il giocatore può usare \`/riforgia autorizzazione:${row.id} data_inizio:YYYY-MM-DD\`.`,
+    embeds: [reforgeEmbed(row)], allowedMentions: { parse: [] },
+  })
+}
+
+async function startReforge(interaction) {
+  const id = extractId(interaction.options.getString("autorizzazione"))
+  const startDate = interaction.options.getString("data_inizio")
+  const startDt = parseStartDate(startDate)
+  if (!startDt) throw new Error("Data non valida. Usa YYYY-MM-DD.")
+  const row = await reforgeTransaction(async (tx) => {
+    const row = await tx.get("SELECT * FROM craft_reforges WHERE id = ? AND guildId = ?", id, interaction.guildId)
+    if (!row || row.crafterUserId !== interaction.user.id) throw new Error("Autorizzazione non trovata fra quelle assegnate ai tuoi PG.")
+    if (row.status !== "approved") throw new Error("Questa autorizzazione è già stata utilizzata o revocata.")
+    await validateReforgeItem(tx, row)
+    const crafter = await tx.get("SELECT * FROM characters WHERE id = ?", row.crafterCharacterId)
+    const owner = await tx.get("SELECT * FROM characters WHERE id = ?", row.ownerCharacterId)
+    if (!crafter || crafter.playerId !== interaction.user.id || !owner) throw new Error("Crafter o proprietario non più validi.")
+    const gold = Number(crafter.gold || 0)
+    const bank = Number(crafter.bank || 0)
+    if (gold + bank < row.cost) throw new Error(`Fondi insufficienti: servono ${row.cost} MO, disponibili ${gold + bank}.`)
+    if (row.material) {
+      const removed = await tx.run("UPDATE materials_inventory SET quantity = quantity - 1 WHERE characterId = ? AND lower(material) = lower(?) AND quantity >= 1", crafter.id, row.material)
+      if (removed.changes !== 1) throw new Error("Il materiale approvato non è più disponibile in una voce univoca dell'inventario.")
+      await tx.run("DELETE FROM materials_inventory WHERE characterId = ? AND lower(material) = lower(?) AND quantity = 0", crafter.id, row.material)
+    }
+    const fortress = await tx.get("SELECT level FROM fortresses WHERE characterId = ?", crafter.id)
+    const rollData = rollCraft(crafter, fortress?.level || 0, row.rarity, row.bonus, REFORGE_SUCCESSES[norm(row.rarity)])
+    const dueAt = dueAtFor(startDt, rollData.rolls.length).toUTC().toISO()
+    const charge = { fromGold: Math.min(gold, row.cost), fromBank: Math.max(0, row.cost - gold) }
+    await tx.run("UPDATE characters SET gold = gold - ?, bank = bank - ? WHERE id = ?", charge.fromGold, charge.fromBank, crafter.id)
+    await tx.run(`UPDATE craft_reforges SET status = 'pending', startDate = ?, dueAt = ?,
+      rollData = ?, chargeData = ?, channelId = ?, lastError = NULL WHERE id = ?`,
+      startDate, dueAt, JSON.stringify(rollData), JSON.stringify(charge), interaction.channelId, row.id)
+    return tx.get("SELECT * FROM craft_reforges WHERE id = ?", row.id)
+  })
+  // La risposta conferma prima il salvataggio: un errore di notifica non annulla
+  // un'operazione già pagata. Il timer riprende anche dopo un riavvio.
+  await interaction.editReply({
+    content: `🔨 **Giacomo:** Riforgiatura #${row.id} avviata. La copia originale resta in inventario; la modifica sarà registrata al completamento.`,
+    embeds: [reforgeEmbed(row)], allowedMentions: { parse: [] },
+  })
+  await checkPendingReforges()
+}
+
+async function finishReforge(id) {
+  return reforgeTransaction(async (tx) => {
+    const row = await tx.get("SELECT * FROM craft_reforges WHERE id = ?", id)
+    if (!row || row.status !== "pending" || row.dueAt > DateTime.utc().toISO()) return
+    await validateReforgeItem(tx, row)
+    // L'effetto della singola copia vive nello storico craft_reforges.
+    // inventory e attunements contengono solo nomi: non duplicarli né rinominarli.
+    await tx.run("UPDATE craft_reforges SET status = 'completed', completedAt = ?, lastError = NULL WHERE id = ? AND status = 'pending'", DateTime.utc().toISO(), id)
+  })
+}
+
+async function checkPendingReforges() {
+  if (checkingReforges) return
+  checkingReforges = true
+  try {
+    const due = await db.all("SELECT id FROM craft_reforges WHERE guildId = ? AND status = 'pending' AND dueAt <= ? ORDER BY dueAt LIMIT 50", GUILD_ID, DateTime.utc().toISO())
+    for (const row of due) {
+      try { await finishReforge(row.id) }
+      catch (err) {
+        await db.run("UPDATE craft_reforges SET lastError = ? WHERE id = ? AND status = 'pending'", String(err.message).slice(0, 1000), row.id)
+        console.error("Riforgiatura da verificare", row.id, err.message)
+      }
+    }
+    const notices = await db.all("SELECT * FROM craft_reforges WHERE guildId = ? AND status = 'completed' AND notifiedAt IS NULL ORDER BY id LIMIT 50", GUILD_ID)
+    for (const row of notices) {
+      try {
+        const channel = await client.channels.fetch(row.channelId)
+        if (!channel?.isTextBased()) continue
+        await channel.send({
+          content: `<@${row.crafterUserId}>, riforgiatura #${row.id} completata. Consulta la modifica con \`/stato_riforgiatura\`.`,
+          embeds: [reforgeEmbed(row)], allowedMentions: { users: [row.crafterUserId] },
+        })
+        await db.run("UPDATE craft_reforges SET notifiedAt = ? WHERE id = ?", DateTime.utc().toISO(), row.id)
+      } catch (err) { console.error("Notifica riforgiatura da ritentare", row.id, err.message) }
+    }
+  } catch (err) { console.error("Errore controllo riforgiature", err) }
+  finally { checkingReforges = false }
+}
+
+async function handleReforgeCommand(interaction) {
+  const command = interaction.commandName
+  if (!interaction.guildId || interaction.guildId !== GUILD_ID) return replyError(interaction, "Usa questo comando nel server configurato.")
+  const staffCommand = ["autorizza_riforgiatura", "revoca_riforgiatura"].includes(command)
+  if (staffCommand && !(await requireCC(interaction))) return
+  if (!staffCommand && !isBeta(interaction.member)) return replyError(interaction, "Serve il ruolo Beta o Craft Control.")
+  await interaction.deferReply({ ephemeral: command !== "riforgia" })
+  try {
+    if (command === "autorizza_riforgiatura") return await authorizeReforge(interaction)
+    if (command === "riforgia") return await startReforge(interaction)
+    const id = extractId(interaction.options.getString("autorizzazione"))
+    const row = await db.get("SELECT * FROM craft_reforges WHERE id = ? AND guildId = ?", id, interaction.guildId)
+    const owner = row && await getCharacter(row.ownerCharacterId)
+    if (!row || (!isCraftControl(interaction.member) && row.crafterUserId !== interaction.user.id && owner?.playerId !== interaction.user.id)) {
+      throw new Error("Riforgiatura non trovata o non accessibile.")
+    }
+    if (command === "revoca_riforgiatura") {
+      const result = await db.run("UPDATE craft_reforges SET status = 'revoked' WHERE id = ? AND status = 'approved'", row.id)
+      if (!result.changes) throw new Error("Puoi revocare soltanto un'autorizzazione non ancora avviata.")
+      row.status = "revoked"
+    }
+    return await interaction.editReply({ embeds: [reforgeEmbed(row)], allowedMentions: { parse: [] } })
+  } catch (err) {
+    return interaction.editReply({ content: `🗂️ **Giacomo:** ${reforgeText(err.message, 1500)}`, embeds: [], allowedMentions: { parse: [] } })
+  }
+}
+
+function reforgeCommands() {
+  const authorize = new SlashCommandBuilder().setName("autorizza_riforgiatura")
+    .setDescription("CC: autorizza una modifica dal ticket, attestando mestiere e catalizzatori invariati.")
+  const stringOption = (builder, name, description, required = true, autocomplete = false, max = 100) => {
+    builder.addStringOption((o) => o.setName(name).setDescription(description)
+      .setRequired(required).setAutocomplete(autocomplete).setMaxLength(max))
+  }
+  stringOption(authorize, "crafter", "PG autorizzato a riforgiare; paga il costo e fornisce il materiale", true, true)
+  stringOption(authorize, "proprietario", "PG che possiede l'oggetto originale", true, true)
+  stringOption(authorize, "oggetto", "Singola copia nell'inventario del proprietario (oppure ID inventario)", true, true)
+  authorize.addStringOption((o) => o.setName("rarita").setDescription("Rarità originale verificata dal CC")
+    .setRequired(true).addChoices(...commandChoices(["Non comune", "Raro"])))
+  stringOption(authorize, "mestiere_originale", "Mestiere della creazione originale, verificato nel ticket", true, true)
+  stringOption(authorize, "modifica", "Modifica approvata: stesso tema, rarità, potenza e catalizzatori", true, false, 1000)
+  stringOption(authorize, "ticket", "Link al ticket Discord o al messaggio di approvazione", true, false, 200)
+  authorize.addIntegerOption((o) => o.setName("costo_mo").setDescription("Costo approvato dal CC: indicare esplicitamente 0 se gratuito")
+    .setRequired(true).setMinValue(0).setMaxValue(1000000))
+  stringOption(authorize, "secondo_mestiere_originale", "Secondo mestiere SOLO se l'oggetto fu creato in collaborazione", false, true)
+  stringOption(authorize, "mestiere_usato", "Uno dei mestieri originali; se omesso usa il primo", false, true)
+  stringOption(authorize, "materiale", "Facoltativo: una unità dal crafter, coerente con la modifica a giudizio del CC", false, true)
+  authorize.addIntegerOption((o) => o.setName("bonus_extra").setDescription("Bonus extra al tiro verificato dal CC")
+    .setMinValue(0).setMaxValue(1000))
+  const start = new SlashCommandBuilder().setName("riforgia").setDescription("Avvia una riforgiatura già autorizzata dal Craft Control.")
+  stringOption(start, "autorizzazione", "Autorizzazione del CC assegnata a un tuo PG (oppure ID)", true, true)
+  stringOption(start, "data_inizio", "Data inizio YYYY-MM-DD: stesso calendario del crafting", true, false, 10)
+  const status = new SlashCommandBuilder().setName("stato_riforgiatura").setDescription("Consulta autorizzazione, tiri e modifica della singola copia, anche completata.")
+  stringOption(status, "autorizzazione", "Riforgiatura da consultare (oppure ID)", true, true)
+  const revoke = new SlashCommandBuilder().setName("revoca_riforgiatura").setDescription("CC: revoca un'autorizzazione non ancora avviata.")
+  stringOption(revoke, "autorizzazione", "Autorizzazione da revocare (oppure ID)", true, true)
+  return [authorize, start, status, revoke]
+}
+
+async function reforgeAutocomplete(interaction) {
+  const command = interaction.commandName
+  const focused = interaction.options.getFocused(true)
+  const staff = isCraftControl(interaction.member)
+  if (!interaction.guildId || interaction.guildId !== GUILD_ID || !isBeta(interaction.member) ||
+      (["autorizza_riforgiatura", "revoca_riforgiatura"].includes(command) && !staff)) {
+    return interaction.respond([])
+  }
+  let choices = []
+  const query = norm(focused.value)
+  const byId = (rows, label) => rows.filter((r) => norm(`${label(r)} ${r.id}`).includes(query)).slice(0, 25)
+    .map((r) => ({ name: `[${r.id}] ${label(r)}`.slice(0, 100), value: String(r.id) }))
+  if (focused.name === "autorizzazione") {
+    const rows = await db.all(`SELECT r.* FROM craft_reforges r
+      LEFT JOIN characters owner ON owner.id = r.ownerCharacterId
+      WHERE r.guildId = ? AND (? = 1 OR r.crafterUserId = ? OR owner.playerId = ?)
+      ORDER BY r.id DESC`, interaction.guildId, staff ? 1 : 0, interaction.user.id, interaction.user.id)
+    const filtered = rows.filter((r) => command === "riforgia" ? r.status === "approved" && r.crafterUserId === interaction.user.id :
+      command === "revoca_riforgiatura" ? r.status === "approved" : true)
+    choices = byId(filtered, (r) => `${r.itemName} (${r.status})`)
+  } else if (focused.name === "crafter" || focused.name === "proprietario") {
+    choices = byId(await getAllCharacters(), (r) => r.name)
+  } else if (focused.name === "oggetto") {
+    const ownerId = extractId(interaction.options.getString("proprietario"))
+    const rows = await db.all(`SELECT i.* FROM inventory i WHERE i.characterId = ?
+      AND NOT EXISTS (SELECT 1 FROM craft_reforges r WHERE r.inventoryId = i.id AND r.status IN ('approved', 'pending'))
+      ORDER BY i.item`, ownerId)
+    choices = byId(rows, (r) => r.item)
+  } else if (focused.name === "materiale") {
+    const rows = await getMaterialsInventory(extractId(interaction.options.getString("crafter")))
+    choices = rows.filter((r) => norm(r.material).includes(query) && r.material.length <= 100).slice(0, 25)
+      .map((r) => ({ name: `${r.material} x${r.quantity}`.slice(0, 100), value: r.material }))
+  } else if (focused.name.includes("mestiere")) {
+    choices = selectMenuOptions(getAllMestieri(), focused.value)
+  }
+  return interaction.respond(choices).catch(() => {})
+}
+
 function commandChoices(list) {
   return list.map((x) => ({ name: x, value: x }))
 }
 const CRAFT_COMMAND_NAMES = [
+  "riforgia",
   "craft",
   "craft_da_ricetta",
   "craft_combinato",
@@ -1630,6 +1970,7 @@ const CRAFT_COMMAND_NAMES = [
   "craft_speciale_combinato",
 ]
 const commands = [
+  ...reforgeCommands(),
      new SlashCommandBuilder()
     .setName("craft_speciale")
     .setDescription(
@@ -2440,6 +2781,7 @@ async function getRecipeFromOption(value) {
   )
 }
 async function handleAutocomplete(interaction) {
+  if (REFORGE_COMMAND_NAMES.includes(interaction.commandName)) return reforgeAutocomplete(interaction)
   const focused = interaction.options.getFocused(true)
   const name = focused.name
   const command = interaction.commandName
@@ -2665,6 +3007,7 @@ async function handleCommand(interaction) {
       )
     }
   }
+  if (REFORGE_COMMAND_NAMES.includes(interaction.commandName)) return handleReforgeCommand(interaction)
     if (interaction.commandName === "craft_speciale") {
     return executeSpecialCraft(interaction)
   }
@@ -2918,24 +3261,24 @@ async function handleCommand(interaction) {
 client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.isAutocomplete()) {
-      return handleAutocomplete(interaction)
+      return await handleAutocomplete(interaction)
     }
     if (interaction.isModalSubmit()) {
       if (interaction.customId.startsWith("recipe_create:")) {
-        return handleRecipeCreateModal(
+        return await handleRecipeCreateModal(
           interaction,
           interaction.customId.replace("recipe_create:", ""),
         )
       }
       if (interaction.customId.startsWith("recipe_effect:")) {
-        return handleRecipeEffectModal(
+        return await handleRecipeEffectModal(
           interaction,
           interaction.customId.replace("recipe_effect:", ""),
         )
       }
     }
     if (interaction.isChatInputCommand()) {
-      return handleCommand(interaction)
+      return await handleCommand(interaction)
     }
   } catch (err) {
     console.error("Errore interactionCreate:", err)
@@ -2955,7 +3298,9 @@ client.once("ready", async () => {
     `Giacomo operativo come ${client.user.tag}. Purtroppo per gli utenti.`,
   )
   await checkPendingCrafts()
+  await checkPendingReforges()
   setInterval(checkPendingCrafts, CHECK_INTERVAL_MS)
+  setInterval(checkPendingReforges, CHECK_INTERVAL_MS)
 })
 await initDB()
 await registerCommands()
