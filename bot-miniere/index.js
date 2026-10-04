@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks"
+import { randomUUID } from "node:crypto"
 import {
   Client,
   GatewayIntentBits,
@@ -44,12 +46,223 @@ const MINIERE_FILE =
     : path.join(__dirname, "miniere.json"));
 
 let db;
+// Calendario condiviso Giacomo/Grummi, versione 1. Richiede lo STESSO file SQLite.
+// Copia identica nei due index: nessuna dipendenza aggiuntiva da installare.
+const activityContext = new AsyncLocalStorage()
+function activityDatabase(connection) {
+  return new Proxy(connection, {
+    get(target, property) {
+      const selected = activityContext.getStore() || target
+      const value = Reflect.get(selected, property, selected)
+      return typeof value === "function" ? value.bind(selected) : value
+    },
+  })
+}
+// Evita che numerosi BEGIN in attesa saturino i worker SQLite nello stesso
+// processo. Tra processi distinti l'esclusione resta garantita da SQLite.
+const activityQueues = globalThis[Symbol.for("westmarch.activity.queues")] ||= new Map()
+async function activityTransaction(action) {
+  const existing = activityContext.getStore()
+  if (existing) return action(existing)
+  const key = path.resolve(DB_PATH)
+  const previous = activityQueues.get(key) || Promise.resolve()
+  let release
+  const turn = new Promise((resolve) => { release = resolve })
+  activityQueues.set(key, turn)
+  await previous
+  try {
+    const tx = await open({ filename: DB_PATH, driver: sqlite3.Database })
+    try {
+      await tx.exec("PRAGMA busy_timeout = 15000")
+      await tx.exec("BEGIN IMMEDIATE")
+      try {
+        const result = await activityContext.run(tx, () => action(tx))
+        await tx.exec("COMMIT")
+        return result
+      } catch (error) {
+        await tx.exec("ROLLBACK")
+        throw error
+      }
+    } finally { await tx.close() }
+  } finally {
+    release()
+    if (activityQueues.get(key) === turn) activityQueues.delete(key)
+  }
+}
+function activityDay(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Rome", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(value))
+  return ["year", "month", "day"].map((key) => parts.find((p) => p.type === key).value).join("-")
+}
+function activityAddDays(day, count) {
+  const date = new Date(`${day}T12:00:00Z`)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== day) {
+    throw new Error("Data calendario non valida: usa YYYY-MM-DD.")
+  }
+  date.setUTCDate(date.getUTCDate() + count)
+  return date.toISOString().slice(0, 10)
+}
+function activityDueISO(day) {
+  // Alle 16:30 italiane anche nei giorni del cambio di ora legale.
+  const noon = new Date(`${activityAddDays(day, 0)}T12:00:00Z`)
+  const hourInRome = Number(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Rome", hour: "2-digit", hourCycle: "h23",
+  }).format(noon))
+  noon.setUTCHours(16 - (hourInRome - 12), 30, 0, 0)
+  return noon.toISOString()
+}
+async function markActivityImported(tx, source) {
+  await tx.run("INSERT OR IGNORE INTO activity_imports(source, importedAt) VALUES (?, ?)", source, new Date().toISOString())
+}
+async function reserveActivityDays(tx, participants, startDay, kind, operationId, label) {
+  if (!activityContext.getStore()) throw new Error("Prenotazione fuori transazione.")
+  activityAddDays(startDay, 0)
+  const results = []
+  for (const person of participants) {
+    if (!Number.isInteger(person.days) || person.days < 1 || person.days > 3650) throw new Error("Numero di giornate non valido.")
+    const dates = []
+    for (let offset = 0; offset < 36500 && dates.length < person.days; offset++) {
+      const day = activityAddDays(startDay, offset)
+      const taken = await tx.get("SELECT 1 FROM activity_days WHERE characterId = ? AND day = ?", person.id, day)
+      if (taken) continue
+      await tx.run(`INSERT INTO activity_days(characterId, day, kind, operationId, label, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?)`, person.id, day, kind, operationId, String(label).slice(0, 300), new Date().toISOString())
+      dates.push(day)
+    }
+    if (dates.length !== person.days) throw new Error("Non ci sono abbastanza giorni liberi nel calendario.")
+    results.push({ id: person.id, dates })
+  }
+  return { participants: results, lastDay: results.map((p) => p.dates.at(-1)).sort().at(-1) }
+}
+async function initActivityCalendar() {
+  await activityTransaction(async (tx) => {
+    await tx.exec(`
+      CREATE TABLE IF NOT EXISTS activity_days (
+        characterId INTEGER NOT NULL, day TEXT NOT NULL,
+        kind TEXT NOT NULL, operationId TEXT NOT NULL,
+        label TEXT NOT NULL DEFAULT '', createdAt TEXT NOT NULL,
+        PRIMARY KEY(characterId, day)
+      );
+      CREATE INDEX IF NOT EXISTS activity_days_operation ON activity_days(operationId);
+      CREATE TABLE IF NOT EXISTS activity_imports (source TEXT PRIMARY KEY, importedAt TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS activity_migration_notes (
+        source TEXT NOT NULL, note TEXT NOT NULL, createdAt TEXT NOT NULL,
+        UNIQUE(source, note)
+      );
+      CREATE TABLE IF NOT EXISTS farm_days (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, characterId INTEGER NOT NULL,
+        farmDate TEXT NOT NULL, createdAt TEXT NOT NULL,
+        UNIQUE(characterId, farmDate)
+      );
+      INSERT OR IGNORE INTO activity_days(characterId, day, kind, operationId, label, createdAt)
+        SELECT characterId, farmDate, 'farm', 'farm:' || id, 'Farming', createdAt FROM farm_days;
+      CREATE TRIGGER IF NOT EXISTS activity_farm_insert AFTER INSERT ON farm_days BEGIN
+        INSERT INTO activity_days(characterId, day, kind, operationId, label, createdAt)
+          VALUES (NEW.characterId, NEW.farmDate, 'farm', 'farm:' || NEW.id, 'Farming', NEW.createdAt);
+      END;
+      CREATE TRIGGER IF NOT EXISTS activity_farm_delete AFTER DELETE ON farm_days BEGIN
+        DELETE FROM activity_days WHERE operationId = 'farm:' || OLD.id AND kind = 'farm';
+      END;
+      CREATE TRIGGER IF NOT EXISTS activity_farm_update AFTER UPDATE OF characterId, farmDate ON farm_days BEGIN
+        DELETE FROM activity_days WHERE operationId = 'farm:' || OLD.id AND kind = 'farm';
+        INSERT INTO activity_days(characterId, day, kind, operationId, label, createdAt)
+          VALUES (NEW.characterId, NEW.farmDate, 'farm', 'farm:' || NEW.id, 'Farming', NEW.createdAt);
+      END;
+    `)
+    await syncLegacyActivities(tx)
+  })
+}
+async function activityMigrationNote(tx, source, note) {
+  await tx.run("INSERT OR IGNORE INTO activity_migration_notes(source, note, createdAt) VALUES (?, ?, ?)", source, note, new Date().toISOString())
+  console.warn(`[Calendario ${source}] ${note}`)
+}
+async function importLegacySchedule(tx, source, participants, start, kind, label, completed) {
+  if (!completed) return reserveActivityDays(tx, participants, start, kind, source, label)
+  // Lo storico già eseguito non può essere riscritto. Conserva le occupazioni
+  // e segnala eventuali sovrapposizioni precedenti a questo aggiornamento.
+  for (const p of participants) {
+    for (let n = 0; n < p.days; n++) {
+      const day = activityAddDays(start, n)
+      const existing = await tx.get("SELECT * FROM activity_days WHERE characterId = ? AND day = ?", p.id, day)
+      if (existing) await activityMigrationNote(tx, source, `Sovrapposizione storica PG #${p.id}, ${day}, con ${existing.operationId}. Nessuna ricompensa modificata.`)
+      else await tx.run("INSERT INTO activity_days VALUES (?, ?, ?, ?, ?, ?)", p.id, day, kind, source, label, new Date().toISOString())
+    }
+  }
+  return null
+}
+async function syncLegacyActivities(tx) {
+  const tables = new Set((await tx.all("SELECT name FROM sqlite_master WHERE type = 'table'")).map((r) => r.name))
+  if (tables.has("craft_pending")) {
+    const rows = await tx.all(`SELECT c.* FROM craft_pending c WHERE NOT EXISTS
+      (SELECT 1 FROM activity_imports a WHERE a.source = 'craft:' || c.id)
+      ORDER BY (c.completedAt IS NULL), c.id`)
+    for (const row of rows) {
+      const source = `craft:${row.id}`
+      const embed = JSON.parse(row.summary)
+      const fields = embed.fields || []
+      const primaryField = fields.find((f) => f.name === "Tiri" || f.name.startsWith("Tiri primario"))
+      const count = Number(primaryField?.value.match(/(?:Completato in|Giorni:)\s*\*\*(\d+)/)?.[1])
+      if (!Number.isInteger(count) || count < 1 || count > 3650) throw new Error(`Calendario: impossibile ricostruire i giorni del craft #${row.id}. Verificare il riepilogo prima di riavviare.`)
+      const participants = [{ id: row.crafterCharacterId, days: count }]
+      const secondaryField = fields.find((f) => f.name.startsWith("Tiri secondario — "))
+      if (secondaryField) {
+        const name = secondaryField.name.slice("Tiri secondario — ".length)
+        const secondary = await tx.all("SELECT id FROM characters WHERE name = ?", name)
+        const days = Number(secondaryField.value.match(/Giorni:\s*\*\*(\d+)/)?.[1])
+        if (secondary.length !== 1 || !Number.isInteger(days) || days < 1 || days > 3650) {
+          throw new Error(`Calendario: collaboratore ambiguo o mancante nel craft #${row.id} (${name}). Serve correggere lo storico prima di prenotare altre attività.`)
+        }
+        participants.push({ id: secondary[0].id, days })
+      }
+      const start = activityAddDays(activityDay(row.dueAt), 1 - Math.max(...participants.map((p) => p.days)))
+      const schedule = await importLegacySchedule(tx, source, participants, start, "craft", row.itemName, !!row.completedAt)
+      if (schedule) {
+        const dueAt = activityDueISO(schedule.lastDay)
+        const finish = fields.find((f) => f.name === "Fine craft")
+        if (finish) finish.value = `${schedule.lastDay.split("-").reverse().join("/")} 16:30`
+        fields.push({ name: "Calendario condiviso", value: schedule.participants.map((p) => `PG #${p.id}: ${p.dates[0]} → ${p.dates.at(-1)} (${p.dates.length} giorni di lavoro)`).join("\n") })
+        await tx.run("UPDATE craft_pending SET dueAt = ?, summary = ? WHERE id = ?", dueAt, JSON.stringify(embed), row.id)
+        if (activityDay(row.dueAt) !== schedule.lastDay) {
+          await activityMigrationNote(tx, source, `Scadenza ripianificata: ${activityDay(row.dueAt)} → ${schedule.lastDay}; tiri e costi conservati.`)
+        }
+      }
+      await markActivityImported(tx, source)
+    }
+  }
+  if (tables.has("craft_reforges")) {
+    const rows = await tx.all(`SELECT r.* FROM craft_reforges r WHERE r.status IN ('pending','completed')
+      AND NOT EXISTS (SELECT 1 FROM activity_imports a WHERE a.source = 'reforge:' || r.id)
+      ORDER BY (r.status = 'pending'), r.id`)
+    for (const row of rows) {
+      const source = `reforge:${row.id}`
+      const rollData = JSON.parse(row.rollData)
+      const days = rollData.rolls.length
+      const schedule = await importLegacySchedule(tx, source, [{ id: row.crafterCharacterId, days }], row.startDate, "reforge", row.itemName, row.status === "completed")
+      if (schedule) {
+        rollData.rolls.forEach((r, i) => { r.date = schedule.participants[0].dates[i] })
+        await tx.run("UPDATE craft_reforges SET dueAt = ?, rollData = ? WHERE id = ?", activityDueISO(schedule.lastDay), JSON.stringify(rollData), row.id)
+        if (activityDay(row.dueAt) !== schedule.lastDay) await activityMigrationNote(tx, source, `Riforgiatura ripianificata al ${schedule.lastDay}; tiri e costi conservati.`)
+      }
+      await markActivityImported(tx, source)
+    }
+  }
+}
+async function activityTimeline(characterId, fromDay) {
+  const rows = await db.all(`SELECT day, kind, label FROM activity_days
+    WHERE characterId = ? AND day >= ? ORDER BY day LIMIT 13`, characterId, fromDay)
+  const labels = { farm: "Farm", craft: "Craft", reforge: "Riforgiatura", manual: "Craft registrato dal CC" }
+  return rows.length ? rows.slice(0, 12).map((r) => `${r.day.split("-").reverse().join("/")} — ${labels[r.kind] || r.kind}: ${r.label.slice(0, 35)}`).join("\n") + (rows.length > 12 ? "\n… altre giornate già prenotate." : "") : "Nessuna giornata prenotata da questa data."
+}
+
 
 async function initDB() {
   db = await open({
     filename: DB_PATH,
     driver: sqlite3.Database
   });
+  db = activityDatabase(db);
+  await db.exec("PRAGMA busy_timeout = 15000");
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS players (
@@ -126,6 +339,7 @@ async function initDB() {
     );
   `);
 
+  await initActivityCalendar();
   console.log(`SQLite Miniere collegato a: ${DB_PATH}`);
 }
 
@@ -745,7 +959,7 @@ async function getWeeklyFarmCount(characterId) {
 
 async function isFarmDateTaken(characterId, farmDate) {
   const row = await db.get(
-    "SELECT id FROM farm_days WHERE characterId = ? AND farmDate = ?",
+    "SELECT day FROM activity_days WHERE characterId = ? AND day = ?",
     characterId,
     farmDate
   );
@@ -773,31 +987,18 @@ async function getNextAvailableFarmDate(pg) {
   throw new Error("Nessuno slot farming disponibile nei prossimi 365 giorni.");
 }
 
-async function registerFarmDay(pg) {
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const farmDate = await getNextAvailableFarmDate(pg);
-    const createdAt = new Date().toISOString();
-
-    try {
-      await db.run(
-        `INSERT INTO farm_days (characterId, farmDate, createdAt)
-         VALUES (?, ?, ?)`,
-        pg.id,
-        farmDate,
-        createdAt
-      );
-
-      return farmDate;
-    } catch (error) {
-      if (String(error?.message || "").includes("UNIQUE")) {
-        continue;
-      }
-
-      throw error;
-    }
-  }
-
-  throw new Error("Impossibile registrare lo slot farming dopo vari tentativi.");
+async function registerFarmDay(pg, reward = null) {
+  return activityTransaction(async (tx) => {
+    await syncLegacyActivities(tx);
+    const current = await db.get("SELECT * FROM characters WHERE id = ?", pg.id);
+    if (!current || current.playerId !== pg.playerId) throw new Error("PG non più disponibile.");
+    const farmDate = await getNextAvailableFarmDate(current);
+    await db.run("INSERT INTO farm_days (characterId, farmDate, createdAt) VALUES (?, ?, ?)",
+      current.id, farmDate, new Date().toISOString());
+    // Il trigger prenota il giorno nello stesso commit di materiali e farm.
+    if (reward?.quantity > 0) await addMaterialToInventory(current.id, reward.material, reward.quantity);
+    return farmDate;
+  });
 }
 // === MATERIALI SPECIALI E GESTIONE INVENTARIO GM ===
 
@@ -1349,15 +1550,14 @@ async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rari
   const totale = dado + livFort;
   const quantita = calcolaRisultato(dado, livFort, rarita);
 
-  const farmDateKey = await registerFarmDay(pg);
+  if (!interaction.deferred) await interaction.deferReply({ ephemeral: false });
+  const farmDateKey = await registerFarmDay(pg, { material: normalizeText(materiale), quantity: quantita });
   const farmDateDisplay = formatDateKeyItalian(farmDateKey);
   const farmWeekStart = getWeekStartKeyFromDateKey(farmDateKey);
 
   const materialToStore = normalizeText(materiale);
 
-  if (quantita > 0) {
-    await addMaterialToInventory(pg.id, materialToStore, quantita);
-  }
+
 
   const farmCount = await getFarmCountForWeek(pg.id, farmWeekStart);
   const farmLimit = getProficiencyBonus(pg.level || 1);
@@ -1412,7 +1612,7 @@ async function eseguiFarm(interaction, pg, fortezzaRaw, materiale, miniera, rari
     )
     .setFooter({ text: `— ${NOME_BOT}, Maestro delle Miniere (e della tua miseria)` });
 
-  return interaction.reply({ content: `<@${interaction.user.id}>`, embeds: [embed] });
+  return interaction.editReply({ content: `<@${interaction.user.id}>`, embeds: [embed] });
 }
 
 // === EVENTS ===
@@ -1560,7 +1760,7 @@ client.on("interactionCreate", async interaction => {
               "Ogni PG può avere al massimo **1 farm registrato per giorno**.\n" +
               "Ogni PG può avere a settimana un numero di farm registrati pari al suo **bonus competenza**.\n" +
               "I materiali vengono aggiunti subito.\n" +
-              "Il farm viene registrato sul primo giorno libero che non sfora il limite della sua settimana.\n" +
+              "Il farm viene registrato sul primo giorno libero da farming, crafting e riforgiature, rispettando il limite settimanale.\n" +
               "Quindi se farmi domenica e il prossimo slot utile è lunedì, quel farm conta nella settimana nuova. Bello, vero? Quasi intelligente.\n" +
               "La fortezza non è obbligatoria: se manca, vale **Nessuna fortezza (Lv. 0)**.",
             inline: false
@@ -1610,7 +1810,12 @@ client.on("interactionCreate", async interaction => {
 
       const materials = await getMaterialsInventory(pg.id);
       const limit = getProficiencyBonus(pg.level || 1);
+      await activityTransaction(syncLegacyActivities);
       const count = await getWeeklyFarmCount(pg.id);
+      const timeline = await activityTimeline(pg.id, getCurrentRomeDateKey());
+      let nextFarm;
+      try { nextFarm = formatDateKeyItalian(await getNextAvailableFarmDate(pg)); }
+      catch { nextFarm = "Nessuno slot disponibile nei prossimi 365 giorni."; }
 
       const normalMaterials = materials.filter(
         row => row.shotName == null
@@ -1742,6 +1947,11 @@ client.on("interactionCreate", async interaction => {
           text: `— ${NOME_BOT}, contabile della tua fatica inutile`
         });
 
+      embed.addFields(
+        { name: "📅 Prossime giornate occupate", value: timeline, inline: false },
+        { name: "⛏️ Prossimo giorno disponibile per un farm", value: nextFarm, inline: false }
+      );
+
       // Calcola la lunghezza complessiva del testo dell'embed.
       const textLength = builder => {
         const data = builder.data;
@@ -1832,7 +2042,7 @@ client.on("interactionCreate", async interaction => {
 
       const fortezza = getEffectiveFortress(await getFortress(pg.id));
 
-      return eseguiFarm(
+      return await eseguiFarm(
         interaction,
         pg,
         fortezza,
